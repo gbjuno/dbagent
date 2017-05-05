@@ -49,6 +49,14 @@ func (mon *MonitorManager) simpleCheckOneIns(insName string) error {
 	return nil
 }
 
+func (mon *MonitorManager) Register(insName string) {
+	mon.join <- insName
+}
+
+func (mon *MonitorManager) Unregister(insName string) {
+	mon.leave <- insName
+}
+
 //Go_Run is used for register mongo into monitor list
 func (mon *MonitorManager) Go_Run() {
 	for {
@@ -72,16 +80,10 @@ func (mon *MonitorManager) Go_Run() {
 }
 
 //Add mongo instance into monitor list
-func (mon *MonitorManager) Init() {
-	for name, insStatus := range mon.ma.statusMap {
-		if insStatus.UnderMonitor {
-			mon.insList = append(mon.insList, insStatus.Name)
-		}
-		//Created but not set UnderMonitor to true
-		if insStatus.UnderMonitor == "" && insStatus.Status == "Created" {
-			mon.insList = append(mon.insList, insStatus.Name)
-			mon.ma.statusMap[name].UnderMonitor = true
-			go mon.ma.send(&statusMap[name])
+func (mon *MonitorManager) Init() error {
+	for _, ins := range mon.ma.mongoMap {
+		if ins.Created && !ins.Deleted {
+			mon.insList = append(mon.insList, ins.Name)
 		}
 	}
 }

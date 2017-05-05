@@ -21,6 +21,7 @@ const (
 
 //MongoAgent is used for manage the mongodb db lifecycle.
 type MongoAgent struct {
+	mongoMap   map[string]Mongo
 	insMap     map[string]MongoInstance
 	statusMap  map[string]MongoInstanceStatus
 	mongoMgr   MongoManager

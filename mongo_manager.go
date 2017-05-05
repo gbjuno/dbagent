@@ -4,8 +4,11 @@ import (
 	"time"
 )
 
+const (
+	MAXTRY = 3
+)
+
 var DeployErr error = errors.New("Mongo Deploy Failed")
-var ParamErr error = errors.New("Invalid Parameter")
 var OpErr error = errors.New("Invalid Operation on Mongo in current state")
 
 type MongoManager struct {
@@ -13,49 +16,152 @@ type MongoManager struct {
 	contextMap map[string]MongoContext
 }
 
-func (mm *MongoManager) GO_Handle(insName string) error {
-	ins := mm.ma.insMap[insName]
-	insStatus := mm.ma.statusMap[insName]
+func (mm *MongoManager) Send(ins *MongoInstance) error {
 
-	if insStatus.LastStatus == "" && insStatus.Status == "" {
-		if ins.NextOp == "CREATE" {
-			mm.contextMap[insName] = MongoContext{mm: mm, ins: ins, insStatus: insStatus}
+}
+
+func (mm *MongoManager) Recovery() error {
+	var oldOp string
+	var dirList []string
+	for _, ins := range mm.ma.mongoMap {
+		switch ins.CurrOp {
+		case NOP:
+			continue
+		case CREATE:
+			ins.CurrOp = ""
+			oldOp = ins.NextOp
+			ins.NextOp = START
+			mm.GO_Hanlde(ins)
+			ins.NextOp = oldOp
+		case START:
+			ins.CurrOp = ""
+			oldOp = ins.NextOp
+			ins.NextOp = START
+			if !ins.Running {
+				mm.GO_Hanlde(ins)
+			}
+			ins.NextOp = oldOp
+		case STOP:
+			ins.CurrOp = ""
+			oldOp = ins.NextOp
+			ins.NextOp = STOP
+			if ins.Running {
+				mm.GO_Hanlde(ins)
+			}
+			ins.NextOp = oldOp
+		case DELETE:
+			ins.CurrOp = ""
+			oldOp = ins.NextOp
+			ins.NextOp = DELETE
+			mm.GO_Hanlde(ins)
+			ins.NextOp = oldOp
+		}
+		dirList = append(dirList, ins.DataPath)
+	}
+	Clean(dirList)
+}
+
+func (mm *MongoManager) CleanDir(dirList []string) {
+}
+
+func (mm *MongoManager) GO_Hanlde(ins *Mongo) error {
+	var err error
+	switch ins.NextOp {
+	case CREATE:
+		if ins.Created == "" {
+			ins.CurrOp = CREATE
+			mm.Send(ins)
+			if err = mm.createMongo(ins); err {
+				ins.Created = false
+				ins.PrevOp = CREATE
+				ins.CurrOp = ""
+				ins.ValidOp = true
+				mm.Send(ins)
+				return err
+			} else {
+				ins.Created = true
+				ins.PrevOp = CREATE
+				ins.CurrOp = ""
+				ins.ValidOp = true
+				mm.Send(ins)
+				mm.ma.monitorMgr.Register(ins.Name)
+				return nil
+			}
 		} else {
+			ins.ValidOp = false
+			mm.Send(ins)
 			return OpErr
 		}
-	}
-
-	if insState, ok := mm.contextMap[insName]; ok {
-	} else {
+	case START:
+		if !(ins.Running || ins.Deleted || ins.CurrOp) {
+			ins.CurrOp = START
+			mm.Send(ins)
+			for i := 0; i < MAXTRY; i++ {
+				if err = mm.startMongo(ins); !err {
+					break
+				}
+			}
+			ins.PrevOp = START
+			ins.CurrOp = ""
+			ins.ValidOp = true
+			mm.send(ins)
+			return nil
+		} else {
+			ins.ValidOp = false
+			mm.Send(ins)
+			return OpErr
+		}
+	case STOP:
+		if ins.Running && !ins.Deleted && !ins.CurrOp {
+			ins.CurrOp = STOP
+			mm.Send(ins)
+			for i := 0; i < MAXTRY; i++ {
+				if err = mm.stopMongo(ins); !err {
+					break
+				}
+			}
+			ins.PrevOp = STOP
+			ins.CurrOp = ""
+			ins.ValidOp = true
+			mm.Send(ins)
+			return nil
+		} else {
+			ins.ValidOp = false
+			mm.Send(ins)
+			return OpErr
+		}
+	case DELETE:
+		if ins.Created && !ins.CurrOp {
+			ins.CurrOp = DELETE
+			mm.Send(ins)
+			if ins.Running {
+				mm.stopMongo(ins, true)
+			}
+			for i := 0; i < MAXTRY; i++ {
+				if err = mm.deleteMongo(ins); !err {
+					break
+				}
+			}
+			ins.Deleted = true
+			ins.PrevOp = DELETE
+			ins.CurrOp = ""
+			ins.ValidOp = true
+			mm.Send(ins)
+			mm.ma.monitorMgr.Unregister(ins.Name)
+			return nil
+		} else {
+			ins.ValidOp = false
+			mm.Send(ins)
+			return OpErr
+		}
+	default:
 		return OpErr
 	}
 }
 
-type MongoContext struct {
-	mm        *MongoManager
-	ins       *MongoInstance
-	insStatus *MongoInstanceStatus
-}
-
-func (mc *MongoContext) Run() {
-	for {
-		op := <-mc.operation
-		fn[op](mc)
-	}
-}
-
 //createMongo is used for deploy mongo instance based on the configuration m
-func createMongo(mc *MongoContext) error {
+func (mm *MongoManager) createMongo(ins *Mongo) error {
 	defer Duration(time.Now(), "createMongo")
-
-	var insName = mc.ins.Name
-	var ins MongoInstance = mc.ins
-	var insStatus MongoInstanceStatus = mc.insStatus
-
-	mc.insStatus.Status = "creating"
-	mc.insStatus.LastUpdate = time.Now()
-	mc.insStatus.CurrOp = "CREATE"
-	mc.mm.ma.Send(&ins)
 
 	var err error
 	var f *os.File
@@ -71,20 +177,12 @@ func createMongo(mc *MongoContext) error {
 
 	if _, err := os.Stat(ins.BasePath); os.IsNotExist(err) {
 		glog.Errorf("BasePath %s does not exist", ins.BasePath)
-		mc.insStatus.LastStatus = "creating"
-		mc.insStatus.Status = "error"
-		mc.insStatus.LastUpdate = time.Now()
-		mc.mm.ma.Send(&ins)
 		return DeployErr
 	}
 
 	//create mongo datapath
 	if err = os.Mkdir(dataPath, os.ModeDir|0755); err != nil {
 		glog.Errorf("can not mkdir %s", dataPath)
-		mc.insStatus.LastStatus = "creating"
-		mc.insStatus.Status = "error"
-		mc.insStatus.LastUpdate = time.Now()
-		mc.mm.ma.Send(&ins)
 		return DeployErr
 	}
 
@@ -151,11 +249,6 @@ func createMongo(mc *MongoContext) error {
 	glog.Infof("create docker container success, id: %s",
 		strings.Replace(string(cmdStdout.Bytes()), "\n", " ", -1))
 
-	mc.insStatus.LastStatus = "creating"
-	mc.insStatus.Status = "created"
-	mc.insStatus.PrevOp = "CREATE"
-	mc.insStatus.LastUpdate = time.Now()
-	mc.mm.ma.Send(&ins)
 	return nil
 
 RECOVER:
@@ -163,21 +256,16 @@ RECOVER:
 	glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", m.Name)
 	glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
 
-	mc.insStatus.LastStatus = "creating"
-	mc.insStatus.Status = "error"
-	mc.insStatus.LastUpdate = time.Now()
-	mc.mm.ma.Send(&ins)
 	return DeployErr
 }
 
-func startMongo(mc *MongoContext) {
-	defer Duration(time.Now(), "startMongo")
+func (mm *MongoManager) startMongo(ins *Mongo) error {
 }
 
-func stopMongo(mc *MongoContext) {
-	defer Duration(time.Now(), "stopMongo")
+func (mm *MongoManager) stopMongo(ins *Mongo) error {
+
 }
 
-func deleteMongo(mc *MongoContext) {
-	defer Duration(time.Now(), "deleteMongo")
+func (mm *MongoManager) deleteMongo(ins *Mongo) error {
+
 }
