@@ -6,18 +6,10 @@ import (
 	"testing"
 )
 
-func TestNewAutoAgent(t *testing.T) {
-	var ins *AutoAgent
-	ins = NewAutoAgent()
-	if ins == nil {
-		t.Fatal("can not get autoagent")
-	}
-}
-
 /*
-func TestAutoAgent_deployMongoIns_noBaseP(t *testing.T) {
-	var ins *AutoAgent
-	ins = NewAutoAgent()
+func TestMongoAgent_deployMongoIns_noBaseP(t *testing.T) {
+	var ins *MongoAgent
+	ins = NewMongoAgent()
 	if ins == nil {
 		t.Fatal("can not get autoagent")
 	}
@@ -31,17 +23,18 @@ func TestAutoAgent_deployMongoIns_noBaseP(t *testing.T) {
 }
 */
 
-func TestAutoAgent_deployMongoIns_BaseP(t *testing.T) {
-	var ins *AutoAgent
+func Test_deployMongoIns_BaseP(t *testing.T) {
+	var ins *MongoAgent
 	var cmd *exec.Cmd
 	var conParam []string
 
-	ins = NewAutoAgent()
+	ins = NewMongoAgent()
 	if ins == nil {
 		t.Fatal("can not get autoagent")
 	}
 
-	var m MongoInstance = MongoInstance{"replTest", 27017, "/opt/data", "", "3.2.11"}
+	var m Mongo = Mongo{MongoInstance: MongoInstance{Name: "replTest", Port: 27017, BasePath: "/opt/data", Version: "3.2.11", Type: SingleDB}}
+
 	os.Mkdir("/opt/data", os.ModeDir|0755)
 
 	if err := ins.deployMongoIns(&m); err != nil {
