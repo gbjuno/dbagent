@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 	//	"os"
 	//	"os/exec"
 	"testing"
@@ -26,7 +27,7 @@ func TestMongoAgent_deployMongoIns_noBaseP(t *testing.T) {
 func initial() *MongoAgent {
 	mongoAgent := NewMongoAgent()
 	for i := 0; i < 5; i++ {
-		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = Mongo{
+		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = &Mongo{
 			Name:        fmt.Sprintf("test%d", i),
 			BasePath:    "/opt/data/",
 			Role:        "SingleDB",
@@ -43,24 +44,37 @@ func initial() *MongoAgent {
 func Test_Handler(t *testing.T) {
 	t.Logf("Test_handler")
 	mongoAgent := NewMongoAgent()
-	for i := 0; i < 5; i++ {
-		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = Mongo{
-			Name:        fmt.Sprintf("test%d", i),
-			BasePath:    "/opt/data/",
-			Role:        "SingleDB",
-			Port:        27000 + i,
-			CacheSizeMB: 10240,
-			Version:     "3.2.11",
-			Type:        SingleDB,
-			NextOp:      "CREATE",
-		}
-		t.Logf("create mongo struct %v", mongoAgent.mongoMap[fmt.Sprintf("test%d", i)])
+	mongoAgent.mongoMap["test0"] = &Mongo{
+		Name:        "test0",
+		BasePath:    "/opt/data",
+		Role:        "SingleDB",
+		Port:        27000,
+		CacheSizeMB: 10240,
+		Version:     "3.2.11",
+		Type:        SingleDB,
+		NextOp:      "CREATE",
 	}
 	t.Logf("get mongoAgent success")
 	ins := mongoAgent.mongoMap["test0"]
-	if err := mongoAgent.mongoMgr.GO_Handle(&ins); err != nil {
+	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
+		t.Fatal("create a mongo instance failed")
+	}
+	t.Logf("create mongo instance success")
+
+	ins.NextOp = "START"
+	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("start a mongo instance failed")
 	}
+
+	t.Logf("start mongo instance success")
+
+	time.Sleep(time.Duration(1) * time.Second)
+
+	ins.NextOp = "STOP"
+	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
+		t.Fatal("stop a mongo instance failed")
+	}
+	t.Logf("stop mongo instance success")
 }
 
 /*

@@ -17,9 +17,7 @@ const (
 
 //MongoAgent is used for manage the mongodb db lifecycle.
 type MongoAgent struct {
-	mongoMap   map[string]Mongo
-	insMap     map[string]MongoInstance
-	statusMap  map[string]MongoInstanceStatus
+	mongoMap   map[string]*Mongo
 	mongoMgr   *MongoManager
 	monitorMgr *MonitorManager
 }
@@ -42,13 +40,15 @@ var once sync.Once
 
 //NewMongoAgent is a *MongoAgent Singleton factory
 func NewMongoAgent() *MongoAgent {
-	Duration(time.Now(), "NewMongoAgent")
+	defer Duration(time.Now(), "NewMongoAgent")
 	once.Do(func() {
 		mongoMgr := NewMongoManager()
-		mongoMgr.ma = mongoAgent
-		monitorMgr := MonitorManager{ma: mongoAgent}
-		mongoMap := make(map[string]Mongo)
+		monitorMgr := MonitorManager{insList: make([]string, 0), join: make(chan string), leave: make(chan string)}
+		mongoMap := make(map[string]*Mongo)
 		mongoAgent = &MongoAgent{mongoMap: mongoMap, mongoMgr: mongoMgr, monitorMgr: &monitorMgr}
+		mongoMgr.ma = mongoAgent
+		monitorMgr.ma = mongoAgent
+		go monitorMgr.Go_Run()
 		glog.Infof("mongoAgent create success %v", mongoAgent)
 	})
 	glog.Infof("return mongoAgent")
@@ -57,10 +57,10 @@ func NewMongoAgent() *MongoAgent {
 
 func main() {
 	flag.Parse()
-	Duration(time.Now(), "main")
+	defer Duration(time.Now(), "main")
 	mongoAgent := NewMongoAgent()
 	for i := 0; i < 5; i++ {
-		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = Mongo{
+		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = &Mongo{
 			Name:        fmt.Sprintf("test%d", i),
 			BasePath:    "/opt/data/",
 			Role:        "SingleDB",
@@ -74,8 +74,8 @@ func main() {
 	}
 	glog.Infof("get mongoAgent success")
 	ins := mongoAgent.mongoMap["test0"]
-	if err := mongoAgent.mongoMgr.GO_Handle(&ins); err != nil {
-		glog.Fatalf("start a mongo instance failed")
+	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
+		glog.Errorf("start a mongo instance failed")
 	}
 	return
 }

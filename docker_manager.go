@@ -45,19 +45,15 @@ func newMongoContainerConfig(mconf *MongoConf) (*container.Config, *container.Ho
 		}
 }
 
-var dockerMgr *DockerManager
-
 func NewDockerManager() *DockerManager {
+	defer Duration(time.Now(), "NewDockerManager")
 	var dockerEndpoint string
-	Duration(time.Now(), "NewDockerManager")
-	once.Do(func() {
-		client, err := getDockerClient(dockerEndpoint)
-		if err != nil {
-			glog.Fatalf("Couldn't connect to docker: %v", err)
-		}
-		glog.Infof("Start docker client with request timeout 10s")
-		dockerMgr = &DockerManager{client: client, timeout: time.Duration(10) * time.Second}
-	})
+	client, err := getDockerClient(dockerEndpoint)
+	if err != nil {
+		glog.Errorf("Couldn't connect to docker: %v", err)
+	}
+	glog.Infof("Start docker client with request timeout 10s")
+	dockerMgr := &DockerManager{client: client, timeout: time.Duration(10) * time.Second}
 	return dockerMgr
 }
 
@@ -76,7 +72,6 @@ func (dockerMgr *DockerManager) createContainer(m *Mongo) (*container.ContainerC
 	}
 	return &createResp, nil
 }
-
 func (dockerMgr *DockerManager) startContainer(containerID string) error {
 	ctx, cancel := dockerMgr.getTimeoutContext()
 	defer cancel()
