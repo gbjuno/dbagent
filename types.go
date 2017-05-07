@@ -15,14 +15,15 @@ type Mongo struct {
 	Type         uint
 	NextOp       string
 
-	Running    bool
-	Created    bool
-	Deleted    bool
-	ValidOp    bool
-	PrevOp     string
-	CurrOp     string
-	DataPath   string
-	LastUpdate time.Time
+	Running     bool
+	Created     bool
+	Deleted     bool
+	ValidOp     bool
+	PrevOp      string
+	CurrOp      string
+	DataPath    string
+	ContainerID string
+	LastUpdate  time.Time
 }
 
 type MongoInstance struct {

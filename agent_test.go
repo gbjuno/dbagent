@@ -1,8 +1,9 @@
 package main
 
+/*
 import (
-	"os"
-	"os/exec"
+	//	"os"
+	//	"os/exec"
 	"testing"
 )
 
@@ -13,3 +14,5 @@ func TestNewMongoAgent(t *testing.T) {
 		t.Fatal("can not get autoagent")
 	}
 }
+
+*/

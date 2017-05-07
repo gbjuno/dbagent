@@ -1,8 +1,9 @@
 package main
 
 import (
-	"os"
-	"os/exec"
+	"fmt"
+	//	"os"
+	//	"os/exec"
 	"testing"
 )
 
@@ -22,7 +23,47 @@ func TestMongoAgent_deployMongoIns_noBaseP(t *testing.T) {
 	}
 }
 */
+func initial() *MongoAgent {
+	mongoAgent := NewMongoAgent()
+	for i := 0; i < 5; i++ {
+		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = Mongo{
+			Name:        fmt.Sprintf("test%d", i),
+			BasePath:    "/opt/data/",
+			Role:        "SingleDB",
+			Port:        27000 + i,
+			CacheSizeMB: 10240,
+			Version:     "3.2.11",
+			Type:        SingleDB,
+			NextOp:      "CREATE",
+		}
+	}
+	return mongoAgent
+}
 
+func Test_Handler(t *testing.T) {
+	t.Logf("Test_handler")
+	mongoAgent := NewMongoAgent()
+	for i := 0; i < 5; i++ {
+		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = Mongo{
+			Name:        fmt.Sprintf("test%d", i),
+			BasePath:    "/opt/data/",
+			Role:        "SingleDB",
+			Port:        27000 + i,
+			CacheSizeMB: 10240,
+			Version:     "3.2.11",
+			Type:        SingleDB,
+			NextOp:      "CREATE",
+		}
+		t.Logf("create mongo struct %v", mongoAgent.mongoMap[fmt.Sprintf("test%d", i)])
+	}
+	t.Logf("get mongoAgent success")
+	ins := mongoAgent.mongoMap["test0"]
+	if err := mongoAgent.mongoMgr.GO_Handle(&ins); err != nil {
+		t.Fatal("start a mongo instance failed")
+	}
+}
+
+/*
 func Test_deployMongoIns_BaseP(t *testing.T) {
 	var ins *MongoAgent
 	var cmd *exec.Cmd
@@ -48,3 +89,4 @@ func Test_deployMongoIns_BaseP(t *testing.T) {
 	cmd.Run()
 	os.RemoveAll("/opt/data")
 }
+*/

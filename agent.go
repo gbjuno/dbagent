@@ -1,16 +1,12 @@
 package main
 
 import (
-	"bytes"
-	"errors"
+	//"bytes"
+	//"errors"
+	"flag"
 	"fmt"
-	cfgTmpl "github.com/GBjuno/dbagent/template"
 	"github.com/golang/glog"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
-	"text/template"
 	"time"
 )
 
@@ -24,8 +20,8 @@ type MongoAgent struct {
 	mongoMap   map[string]Mongo
 	insMap     map[string]MongoInstance
 	statusMap  map[string]MongoInstanceStatus
-	mongoMgr   MongoManager
-	monitorMgr MonitorManager
+	mongoMgr   *MongoManager
+	monitorMgr *MonitorManager
 }
 
 func (ma *MongoAgent) WatchAndNotify() {
@@ -41,20 +37,45 @@ func (ma *MongoAgent) Send(changed interface{}) {
 	}
 }
 
-func (ma *MongoAgent) Init() {
-	return ma
-}
-
-var insMongoAgent *MongoAgent
+var mongoAgent *MongoAgent
 var once sync.Once
 
 //NewMongoAgent is a *MongoAgent Singleton factory
-func NewMongoAgent() MongoAgent {
+func NewMongoAgent() *MongoAgent {
 	Duration(time.Now(), "NewMongoAgent")
 	once.Do(func() {
-		mongoMgr := MongoManager{insMongoAgent}
-		monitorMgr := MonitorManager{insMongoAgent}
-		insMongoAgent = MongoAgent{mongoMgr: mongoMgr, monitorMgr: monitorMgr}
+		mongoMgr := NewMongoManager()
+		mongoMgr.ma = mongoAgent
+		monitorMgr := MonitorManager{ma: mongoAgent}
+		mongoMap := make(map[string]Mongo)
+		mongoAgent = &MongoAgent{mongoMap: mongoMap, mongoMgr: mongoMgr, monitorMgr: &monitorMgr}
+		glog.Infof("mongoAgent create success %v", mongoAgent)
 	})
-	return insMongoAgent
+	glog.Infof("return mongoAgent")
+	return mongoAgent
+}
+
+func main() {
+	flag.Parse()
+	Duration(time.Now(), "main")
+	mongoAgent := NewMongoAgent()
+	for i := 0; i < 5; i++ {
+		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = Mongo{
+			Name:        fmt.Sprintf("test%d", i),
+			BasePath:    "/opt/data/",
+			Role:        "SingleDB",
+			Port:        27000 + i,
+			CacheSizeMB: 10240,
+			Version:     "3.2.11",
+			Type:        SingleDB,
+			NextOp:      "CREATE",
+		}
+		glog.Infof("create mongo struct %v", mongoAgent.mongoMap[fmt.Sprintf("test%d", i)])
+	}
+	glog.Infof("get mongoAgent success")
+	ins := mongoAgent.mongoMap["test0"]
+	if err := mongoAgent.mongoMgr.GO_Handle(&ins); err != nil {
+		glog.Fatalf("start a mongo instance failed")
+	}
+	return
 }

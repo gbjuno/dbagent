@@ -1,44 +1,66 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	cfgTmpl "github.com/GBjuno/dbagent/template"
+	"github.com/golang/glog"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
+	"io"
+	"os"
+	"text/template"
 	"time"
 )
 
 const (
-	MAXTRY = 3
+	MAXTRY     = 3
+	MAXTIMEOUT = 10
 )
 
 var DeployErr error = errors.New("Mongo Deploy Failed")
 var OpErr error = errors.New("Invalid Operation on Mongo in current state")
 
 type MongoManager struct {
-	ma         *MongoAgent
-	contextMap map[string]MongoContext
+	ma        *MongoAgent
+	dockerMgr *DockerManager
 }
 
-func (mm *MongoManager) Send(ins *MongoInstance) error {
+var mongoMgr *MongoManager
 
+func NewMongoManager() *MongoManager {
+	Duration(time.Now(), "NewMongoManager")
+	once.Do(func() {
+		dockerMgr := NewDockerManager()
+		glog.Infof("Start docker manager with request timeout=%v", MAXTIMEOUT)
+		mongoMgr = &MongoManager{dockerMgr: dockerMgr}
+	})
+	return mongoMgr
+}
+
+func (mm *MongoManager) Send(ins *Mongo) error {
+	glog.Infof("flash mongo struct %s", ins.Name)
+	return nil
 }
 
 func (mm *MongoManager) Recovery() error {
 	var oldOp string
 	var dirList []string
+	var basePathList []string
 	for _, ins := range mm.ma.mongoMap {
 		switch ins.CurrOp {
-		case NOP:
-			continue
 		case CREATE:
 			ins.CurrOp = ""
 			oldOp = ins.NextOp
 			ins.NextOp = START
-			mm.GO_Hanlde(ins)
+			mm.GO_Handle(&ins)
 			ins.NextOp = oldOp
 		case START:
 			ins.CurrOp = ""
 			oldOp = ins.NextOp
 			ins.NextOp = START
 			if !ins.Running {
-				mm.GO_Hanlde(ins)
+				mm.GO_Handle(&ins)
 			}
 			ins.NextOp = oldOp
 		case STOP:
@@ -46,37 +68,52 @@ func (mm *MongoManager) Recovery() error {
 			oldOp = ins.NextOp
 			ins.NextOp = STOP
 			if ins.Running {
-				mm.GO_Hanlde(ins)
+				mm.GO_Handle(&ins)
 			}
 			ins.NextOp = oldOp
 		case DELETE:
 			ins.CurrOp = ""
 			oldOp = ins.NextOp
 			ins.NextOp = DELETE
-			mm.GO_Hanlde(ins)
+			mm.GO_Handle(&ins)
 			ins.NextOp = oldOp
+		case NOP:
 		}
 		dirList = append(dirList, ins.DataPath)
+		if len(basePathList) == 0 {
+			basePathList = append(basePathList, ins.BasePath)
+		} else {
+			for _, basePath := range basePathList {
+				if ins.BasePath != basePath {
+					basePathList = append(basePathList, ins.BasePath)
+					break
+				}
+			}
+		}
 	}
-	Clean(dirList)
+	mm.CleanDir(dirList, basePathList)
+	return nil
 }
 
-func (mm *MongoManager) CleanDir(dirList []string) {
+func (mm *MongoManager) CleanDir(dirList []string, basePathList []string) {
 }
 
-func (mm *MongoManager) GO_Hanlde(ins *Mongo) error {
+func (mm *MongoManager) GO_Handle(ins *Mongo) error {
+	Duration(time.Now(), "NewMongoAgent")
+	glog.Infof("MongoManager GO_Handle, instance: %v", ins)
 	var err error
 	switch ins.NextOp {
 	case CREATE:
-		if ins.Created == "" {
+		if ins.Created {
 			ins.CurrOp = CREATE
 			mm.Send(ins)
-			if err = mm.createMongo(ins); err {
+			if err = mm.createMongo(ins); err != nil {
 				ins.Created = false
 				ins.PrevOp = CREATE
 				ins.CurrOp = ""
 				ins.ValidOp = true
 				mm.Send(ins)
+				glog.Fatalf("instance %s created failed", ins.Name)
 				return err
 			} else {
 				ins.Created = true
@@ -84,6 +121,7 @@ func (mm *MongoManager) GO_Hanlde(ins *Mongo) error {
 				ins.CurrOp = ""
 				ins.ValidOp = true
 				mm.Send(ins)
+				glog.Fatalf("instance %s created success", ins.Name)
 				mm.ma.monitorMgr.Register(ins.Name)
 				return nil
 			}
@@ -93,18 +131,18 @@ func (mm *MongoManager) GO_Hanlde(ins *Mongo) error {
 			return OpErr
 		}
 	case START:
-		if !(ins.Running || ins.Deleted || ins.CurrOp) {
+		if !(ins.Running || ins.Deleted || ins.CurrOp == "") {
 			ins.CurrOp = START
 			mm.Send(ins)
 			for i := 0; i < MAXTRY; i++ {
-				if err = mm.startMongo(ins); !err {
+				if err = mm.startMongo(ins); err == nil {
 					break
 				}
 			}
 			ins.PrevOp = START
 			ins.CurrOp = ""
 			ins.ValidOp = true
-			mm.send(ins)
+			mm.Send(ins)
 			return nil
 		} else {
 			ins.ValidOp = false
@@ -112,11 +150,11 @@ func (mm *MongoManager) GO_Hanlde(ins *Mongo) error {
 			return OpErr
 		}
 	case STOP:
-		if ins.Running && !ins.Deleted && !ins.CurrOp {
+		if ins.Running && !ins.Deleted && ins.CurrOp == "" {
 			ins.CurrOp = STOP
 			mm.Send(ins)
 			for i := 0; i < MAXTRY; i++ {
-				if err = mm.stopMongo(ins); !err {
+				if err = mm.stopMongo(ins, false); err == nil {
 					break
 				}
 			}
@@ -131,14 +169,14 @@ func (mm *MongoManager) GO_Hanlde(ins *Mongo) error {
 			return OpErr
 		}
 	case DELETE:
-		if ins.Created && !ins.CurrOp {
+		if ins.Created && ins.CurrOp == "" {
 			ins.CurrOp = DELETE
 			mm.Send(ins)
 			if ins.Running {
 				mm.stopMongo(ins, true)
 			}
 			for i := 0; i < MAXTRY; i++ {
-				if err = mm.deleteMongo(ins); !err {
+				if err = mm.deleteMongo(ins); err == nil {
 					break
 				}
 			}
@@ -167,10 +205,6 @@ func (mm *MongoManager) createMongo(ins *Mongo) error {
 	var f *os.File
 	var tmpl *template.Template
 	var tmplConf string
-	var conParam []string
-	var cmd *exec.Cmd
-	var cmdStdout bytes.Buffer
-	var cmdStderr bytes.Buffer
 	var now time.Time = time.Now()
 	var dataPath string = fmt.Sprintf("%s/%s_%04d%02d%02d_%02d%02d", ins.BasePath, ins.Name,
 		now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute())
@@ -188,7 +222,7 @@ func (mm *MongoManager) createMongo(ins *Mongo) error {
 
 	glog.Infof("create directory %s for mongo %s", dataPath, ins.Name)
 
-	insStatus.DataPath = dataPath
+	ins.DataPath = dataPath
 
 	//create configuration file
 	glog.Infof("creating configuration file mongodb.conf for mongo %s", ins.Name)
@@ -196,10 +230,13 @@ func (mm *MongoManager) createMongo(ins *Mongo) error {
 	defer f.Close()
 	if err != nil {
 		glog.Errorf("can not create configuration file %s", dataPath+"/mongodb.conf")
-		goto RECOVER
+		os.RemoveAll(dataPath)
+		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", ins.Name)
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
+		return DeployErr
 	}
 
-	switch m.Type {
+	switch ins.Type {
 	case SingleDB:
 		tmplConf = cfgTmpl.Single
 	case ReplsetDB:
@@ -211,61 +248,106 @@ func (mm *MongoManager) createMongo(ins *Mongo) error {
 	tmpl, err = template.New("db").Parse(tmplConf)
 	if err != nil {
 		glog.Errorf("can not template %d", tmplConf)
-		goto RECOVER
+		os.RemoveAll(dataPath)
+		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", ins.Name)
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
+		return DeployErr
 	}
 
 	err = tmpl.Execute(f, ins)
 	if err != nil {
 		glog.Errorf("can not template %d", tmplConf)
-		goto RECOVER
+		os.RemoveAll(dataPath)
+		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", ins.Name)
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
+		return DeployErr
 	}
 	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.Name)
 
 	//startup the mongodb instance by using docker
-	conParam = []string{"-H", "127.0.0.1:4321", "run", "-itd", "--network", "host",
-		"--name", ins.Name, "-v", insStatus.DataPath + ":/data",
-		fmt.Sprintf("docker.gf.com.cn/gf-mongodb:%s", ins.Version),
-		"bash", "-c", "/usr/bin/mongod -f /data/mongodb.conf"}
-
-	cmd = exec.Command("docker", conParam...)
-	cmd.Stdout = &cmdStdout
-	cmd.Stderr = &cmdStderr
-	err = cmd.Start()
-
+	resp, err := dockerMgr.createContainer(ins)
 	if err != nil {
 		glog.Errorf("run docker container failed: %s", err.Error())
 		goto RECOVER
 	}
 
-	glog.Infof("wait for docker container up")
-	err = cmd.Wait()
-
-	if err != nil {
-		glog.Errorf("run docker container failed: %s, %s", err.Error(),
-			strings.Replace(string(cmdStderr.Bytes()), "\n", " ", -1))
-		goto RECOVER
-	}
-
-	glog.Infof("create docker container success, id: %s",
-		strings.Replace(string(cmdStdout.Bytes()), "\n", " ", -1))
-
+	ins.ContainerID = resp.ID
+	mm.Send(ins)
+	glog.Infof("create docker container success, id: %s", ins.ContainerID)
 	return nil
 
 RECOVER:
 	os.RemoveAll(dataPath)
-	glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", m.Name)
+	glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", ins.Name)
 	glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
 
 	return DeployErr
 }
 
 func (mm *MongoManager) startMongo(ins *Mongo) error {
+	defer Duration(time.Now(), "startMongo")
+
+	glog.Infof("starting mongo %s, container id %s", ins.Name, ins.ContainerID)
+	if err := dockerMgr.startContainer(ins.ContainerID); err != nil {
+		glog.Fatalf("start mongo %s and container id %s failed", ins.Name, ins.ContainerID)
+		return err
+	}
+
+	glog.Infof("starting mongo %s, container id %s success", ins.Name, ins.ContainerID)
+	return nil
 }
 
-func (mm *MongoManager) stopMongo(ins *Mongo) error {
-
+func (mm *MongoManager) stopMongo(ins *Mongo, force bool) error {
+	defer Duration(time.Now(), "stopMongo")
+	if err := mm.shutdownMongo(ins, force); err != nil {
+		glog.Infof("shutdown mongo %s, container id %s", ins.Name, ins.ContainerID)
+		return err
+	}
+	/*
+		glog.Infof("stopping mongo %s, container id %s", ins.Name, ins.ContainerID)
+		if err := dockerMgr.stopContainer(ins.ContainerID); err != nil {
+			glog.Fatalf("stop mongo %s and container id %s failed", ins.Name, ins.ContainerID)
+			return err
+		}
+	*/
+	glog.Infof("shutdown mongo %s, container id %s success", ins.Name, ins.ContainerID)
+	return nil
 }
 
 func (mm *MongoManager) deleteMongo(ins *Mongo) error {
+	defer Duration(time.Now(), "stopMongo")
 
+	glog.Infof("stopping mongo %s, container id %s", ins.Name, ins.ContainerID)
+	if err := dockerMgr.stopContainer(ins.ContainerID); err != nil {
+		glog.Fatalf("stop mongo %s and container id %s failed", ins.Name, ins.ContainerID)
+		return err
+	}
+
+	glog.Infof("stop mongo %s, container id %s success", ins.Name, ins.ContainerID)
+	return nil
+
+}
+
+func (mm *MongoManager) shutdownMongo(ins *Mongo, force bool) error {
+	port := ins.Port
+	session, err := mgo.DialWithTimeout(fmt.Sprintf("mongodb://127.0.0.1:%d/admin", port), time.Duration(5)*time.Second)
+	if err != nil {
+		glog.Errorf("connect to mongodb %s failed, port %d, error: %v", ins.Name, port, err)
+		return err
+	}
+	glog.Infof("connect to mongodb %s succeed, port %d", ins.Name, port)
+	defer session.Close()
+
+	var result bson.M
+	err = session.DB("admin").Run(bson.D{{"shutdown", 1}, {"force", force}}, &result)
+	if err != nil {
+		if err == io.EOF {
+			glog.Infof("send shutdown mongodb succeed, port %d", port)
+			glog.Infof("disconnect from mongodb %s after sending shutdown command", ins.Name)
+			return nil
+		}
+		glog.Errorf("shutdown mongodb failed, port %d, error: %v, result: %v", port, err, result)
+		return err
+	}
+	return nil
 }
