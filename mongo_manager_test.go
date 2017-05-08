@@ -29,7 +29,7 @@ func initial() *MongoAgent {
 	for i := 0; i < 5; i++ {
 		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = &Mongo{
 			Name:        fmt.Sprintf("test%d", i),
-			BasePath:    "/opt/data/",
+			BasePath:    "/opt/data",
 			Role:        "SingleDB",
 			Port:        27000 + i,
 			CacheSizeMB: 10240,
@@ -52,7 +52,7 @@ func Test_Handler(t *testing.T) {
 		CacheSizeMB: 10240,
 		Version:     "3.2.11",
 		Type:        SingleDB,
-		NextOp:      "CREATE",
+		Status:      CREATING,
 	}
 	t.Logf("get mongoAgent success")
 	ins := mongoAgent.mongoMap["test0"]
@@ -61,20 +61,26 @@ func Test_Handler(t *testing.T) {
 	}
 	t.Logf("create mongo instance success")
 
-	ins.NextOp = "START"
-	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
-		t.Fatal("start a mongo instance failed")
-	}
-
-	t.Logf("start mongo instance success")
-
-	time.Sleep(time.Duration(1) * time.Second)
-
-	ins.NextOp = "STOP"
+	ins.Status = STOPPING
 	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("stop a mongo instance failed")
 	}
+
 	t.Logf("stop mongo instance success")
+
+	time.Sleep(time.Duration(3) * time.Second)
+
+	ins.Status = STARTING
+	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
+		t.Fatal("start a mongo instance failed")
+	}
+	t.Logf("start mongo instance success")
+
+	ins.Status = DELETING
+	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
+		t.Fatal("delete a mongo instance failed")
+	}
+	t.Fatalf("delete mongo instance success")
 }
 
 /*

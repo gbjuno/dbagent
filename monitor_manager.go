@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/golang/glog"
+	"golang.org/x/net/context"
 	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 	"time"
 )
 
@@ -28,13 +30,17 @@ func (mon *MonitorManager) monitorAll() {
 	}
 }
 
+func (mon *MonitorManager) monitorWorker(ctx context.Context, ins *Mongo) {
+
+}
+
 func (mon *MonitorManager) simpleCheckOneIns(insName string) {
 	ins := mon.ma.mongoMap[insName]
 	glog.Infof("checking mongo instance %s status...", ins.Name)
 	conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Port))
 	if err != nil {
-		glog.Errorf("connect mongo %s failed", ins.Name)
-		glog.Errorf("mongo %s is not running", ins.Name)
+		glog.Errorf("connect mongo instance %s failed", ins.Name)
+		glog.Errorf("mongo instance %s is not running", ins.Name)
 		ins.Running = false
 		mon.ma.mongoMgr.Send(ins)
 		return
@@ -46,7 +52,7 @@ func (mon *MonitorManager) simpleCheckOneIns(insName string) {
 	err = c.Find(nil).One(&result)
 	if err != nil {
 		glog.Errorf("cannot get data of DB local Table startup_log of mongo %s", ins.Name)
-		glog.Errorf("mongo %s is not running property", ins.Name)
+		glog.Errorf("mongo instance %s is not running property", ins.Name)
 		ins.Running = false
 		mon.ma.mongoMgr.Send(ins)
 		return
@@ -55,6 +61,34 @@ func (mon *MonitorManager) simpleCheckOneIns(insName string) {
 	ins.Running = true
 	glog.Infof("instance %v", ins)
 	mon.ma.mongoMgr.Send(ins)
+}
+
+func (mon *MonitorManager) checkInsDetail(ctx context.Context, insNameCh <-chan string) {
+	glog.Infof("monitor worker is running")
+	for {
+		select {
+		case <-ctx.Done():
+			glog.Infof("monitor worker exit because of ctx cancel")
+			break
+		case insName := <-insNameCh:
+			ins := mon.ma.mongoMap[insName]
+			conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Port))
+			if err != nil {
+				glog.Errorf("connect mongo instance %s failed", ins.Name)
+				glog.Errorf("mongo instance %s is not running", ins.Name)
+				ins.Running = false
+				mon.ma.mongoMgr.Send(ins)
+			}
+
+			var result bson.M
+			err = conn.DB("admin").Run(bson.D{{"serverStatus", 1}}, &result)
+			if err != nil {
+				glog.Infof("Mongo Server Status: %v", result)
+			}
+			conn.Close()
+		}
+	}
+	glog.Infof("monitor worker exits")
 }
 
 func (mon *MonitorManager) Register(insName string) {
@@ -110,8 +144,6 @@ func (mon *MonitorManager) Go_Run() {
 //Add mongo instance into monitor list
 func (mon *MonitorManager) Init() {
 	for _, ins := range mon.ma.mongoMap {
-		if ins.Created && !ins.Deleted {
-			mon.insList = append(mon.insList, ins.Name)
-		}
+		mon.insList = append(mon.insList, ins.Name)
 	}
 }

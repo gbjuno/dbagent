@@ -102,7 +102,7 @@ func (dockerMgr *DockerManager) killContainer(containerID string) error {
 func (dockerMgr *DockerManager) removeContainer(containerID string) error {
 	ctx, cancel := dockerMgr.getTimeoutContext()
 	defer cancel()
-	if err := dockerMgr.client.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{RemoveVolumes: true, RemoveLinks: true, Force: true}); err != nil {
+	if err := dockerMgr.client.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{RemoveVolumes: false, RemoveLinks: false, Force: true}); err != nil {
 		return err
 	}
 	return nil

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"sync"
 	"time"
 )
 
 type Mongo struct {
+	locker       sync.Mutex
 	Name         string
 	BasePath     string
 	Role         string
@@ -16,11 +18,7 @@ type Mongo struct {
 	NextOp       string
 
 	Running     bool
-	Created     bool
-	Deleted     bool
-	ValidOp     bool
-	PrevOp      string
-	CurrOp      string
+	Status      string
 	DataPath    string
 	ContainerID string
 	LastUpdate  time.Time
@@ -50,9 +48,13 @@ type MongoInstanceStatus struct {
 }
 
 const (
-	CREATE = "CREATE"
-	START  = "START"
-	STOP   = "STOP"
-	DELETE = "DELETE"
-	NOP    = ""
+	CREATING = "creating"
+	STARTING = "starting"
+	STOPPING = "stopping"
+	DELETING = "deleting"
+	RUNNING  = "running"
+	STOPPED  = "stopped"
+	DELETED  = "deleted"
+	ERROR    = "error"
+	NOP      = ""
 )

@@ -35,181 +35,86 @@ func NewMongoManager() *MongoManager {
 }
 
 func (mm *MongoManager) Send(ins *Mongo) error {
-	glog.Infof("flash mongo struct %s, currentOp: %s", ins.Name, ins.CurrOp)
+	glog.Infof("flash mongo struct %s, currentOp: %s", ins.Name, ins.Status)
 	return nil
-}
-
-func (mm *MongoManager) Recovery() error {
-	var oldOp string
-	var dirList []string
-	var basePathList []string
-	for _, ins := range mm.ma.mongoMap {
-		switch ins.CurrOp {
-		case CREATE:
-			ins.CurrOp = ""
-			oldOp = ins.NextOp
-			ins.NextOp = START
-			mm.GO_Handle(ins)
-			ins.NextOp = oldOp
-		case START:
-			ins.CurrOp = ""
-			oldOp = ins.NextOp
-			ins.NextOp = START
-			if !ins.Running {
-				mm.GO_Handle(ins)
-			}
-			ins.NextOp = oldOp
-		case STOP:
-			ins.CurrOp = ""
-			oldOp = ins.NextOp
-			ins.NextOp = STOP
-			if ins.Running {
-				mm.GO_Handle(ins)
-			}
-			ins.NextOp = oldOp
-		case DELETE:
-			ins.CurrOp = ""
-			oldOp = ins.NextOp
-			ins.NextOp = DELETE
-			mm.GO_Handle(ins)
-			ins.NextOp = oldOp
-		case NOP:
-		}
-		dirList = append(dirList, ins.DataPath)
-		if len(basePathList) == 0 {
-			basePathList = append(basePathList, ins.BasePath)
-		} else {
-			for _, basePath := range basePathList {
-				if ins.BasePath != basePath {
-					basePathList = append(basePathList, ins.BasePath)
-					break
-				}
-			}
-		}
-	}
-	mm.CleanDir(dirList, basePathList)
-	return nil
-}
-
-func (mm *MongoManager) CleanDir(dirList []string, basePathList []string) {
 }
 
 func (mm *MongoManager) GO_Handle(ins *Mongo) error {
-	Duration(time.Now(), "NewMongoAgent")
-	glog.Infof("MongoManager GO_Handle, mongo instance: %s, nextOp: %s", ins.Name, ins.NextOp)
+	Duration(time.Now(), "GO_Handler")
+	glog.Infof("MongoManager GO_Handle, mongo instance: %s, Status: %s", ins.Name, ins.Status)
 	var err error
-	switch ins.NextOp {
-	case CREATE:
-		if !ins.Created {
-			ins.CurrOp = CREATE
-			glog.Infof("creating instance %s", ins.Name)
+	ins.locker.Lock()
+	defer ins.locker.Unlock()
+	switch ins.Status {
+	case CREATING:
+		glog.Infof("creating mongo instance %s", ins.Name)
+		if err = mm.createMongo(ins); err != nil {
+			ins.Status = ERROR
 			mm.Send(ins)
-			if err = mm.createMongo(ins); err != nil {
-				ins.Created = false
-				ins.PrevOp = CREATE
-				ins.CurrOp = ""
-				ins.ValidOp = true
+			glog.Errorf("mongo instance %s created failed", ins.Name)
+			return err
+		}
+		if err = mm.startMongo(ins); err != nil {
+			ins.Status = ERROR
+			glog.Errorf("mongo instance %s started failed", ins.Name)
+			return err
+		}
+		ins.Status = RUNNING
+		mm.Send(ins)
+		glog.Infof("create mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+		mm.ma.monitorMgr.Register(ins.Name)
+		return nil
+	case STARTING:
+		glog.Infof("starting mongo instance %s, container id %s", ins.Name, ins.ContainerID)
+		for i := 0; i < MAXTRY; i++ {
+			if err = mm.startMongo(ins); err == nil {
+				ins.Status = RUNNING
 				mm.Send(ins)
-				glog.Errorf("instance %s created failed", ins.Name)
-				return err
-			} else {
-				ins.Created = true
-				ins.PrevOp = CREATE
-				ins.CurrOp = ""
-				ins.ValidOp = true
-				mm.Send(ins)
-				glog.Infof("instance %s created success", ins.Name)
-				mm.ma.monitorMgr.Register(ins.Name)
+				glog.Infof("start mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
 				return nil
 			}
-		} else {
-			glog.Errorf("invalid operation %s on instance %s ", ins.NextOp, ins.Name)
-			glog.Errorf("current operation %s on instance %s ", ins.CurrOp, ins.Name)
-			glog.Errorf("instance %v ", ins)
-			ins.ValidOp = false
-			mm.Send(ins)
-			return OpErr
 		}
-	case START:
-		if !(ins.Running || ins.Deleted) && ins.CurrOp == "" {
-			ins.CurrOp = START
-			glog.Infof("start instance %s, containerID %s", ins.Name, ins.ContainerID)
-			mm.Send(ins)
-			for i := 0; i < MAXTRY; i++ {
-				if err = mm.startMongo(ins); err == nil {
-					break
-				}
+		ins.Status = ERROR
+		mm.Send(ins)
+		glog.Errorf("start mongo instance %s, container id %s failed", ins.Name, ins.ContainerID)
+		return err
+	case STOPPING:
+		glog.Infof("stopping mongo instance %s, container id %s", ins.Name, ins.ContainerID)
+		for i := 0; i < MAXTRY; i++ {
+			if err = mm.stopMongo(ins, false); err == nil {
+				ins.Status = STOPPED
+				mm.Send(ins)
+				glog.Infof("stop mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+				return nil
 			}
-			ins.PrevOp = START
-			ins.CurrOp = ""
-			ins.ValidOp = true
-			mm.Send(ins)
-			glog.Errorf("instance %v ", ins)
-			return nil
-		} else {
-			glog.Errorf("invalid operation %s on instance %s ", ins.NextOp, ins.Name)
-			glog.Errorf("current operation %s on instance %s ", ins.CurrOp, ins.Name)
-			glog.Errorf("instance %v ", ins)
-			ins.ValidOp = false
-			mm.Send(ins)
-			return OpErr
 		}
-	case STOP:
-		glog.Errorf("instance %v ", ins)
-		if ins.Running && !ins.Deleted && ins.CurrOp == "" {
-			ins.CurrOp = STOP
-			mm.Send(ins)
-			for i := 0; i < MAXTRY; i++ {
-				if err = mm.stopMongo(ins, false); err == nil {
-					break
-				}
-			}
-			ins.PrevOp = STOP
-			ins.CurrOp = ""
-			ins.ValidOp = true
-			mm.Send(ins)
-			return nil
-		} else {
-			glog.Errorf("invalid operation %s on instance %s ", ins.NextOp, ins.Name)
-			glog.Errorf("current operation %s on instance %s ", ins.CurrOp, ins.Name)
-			glog.Errorf("instance %v ", ins)
-			ins.ValidOp = false
-			mm.Send(ins)
-			return OpErr
+		ins.Status = STOPPED
+		mm.Send(ins)
+		glog.Errorf("stop mongo instance %s, container id %s failed", ins.Name, ins.ContainerID)
+		return err
+	case DELETING:
+		if ins.Running {
+			mm.stopMongo(ins, true)
 		}
-	case DELETE:
-		if ins.Created && ins.CurrOp == "" {
-			ins.CurrOp = DELETE
-			mm.Send(ins)
-			if ins.Running {
-				mm.stopMongo(ins, true)
+		for i := 0; i < MAXTRY; i++ {
+			if err = mm.deleteMongo(ins); err == nil {
+				ins.Status = DELETED
+				mm.Send(ins)
+				glog.Infof("Delete mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+				return nil
 			}
-			for i := 0; i < MAXTRY; i++ {
-				if err = mm.deleteMongo(ins); err == nil {
-					break
-				}
-			}
-			ins.Deleted = true
-			ins.PrevOp = DELETE
-			ins.CurrOp = ""
-			ins.ValidOp = true
-			mm.Send(ins)
-			mm.ma.monitorMgr.Unregister(ins.Name)
-			return nil
-		} else {
-			glog.Errorf("invalid operation %s on instance %s ", ins.NextOp, ins.Name)
-			glog.Errorf("current operation %s on instance %s ", ins.CurrOp, ins.Name)
-			glog.Errorf("instance %v ", ins)
-			ins.ValidOp = false
-			mm.Send(ins)
-			return OpErr
 		}
+		ins.Status = ERROR
+		mm.Send(ins)
+		glog.Errorf("Delete mongo instance %s, container id %s failed", ins.Name, ins.ContainerID)
+		mm.ma.monitorMgr.Unregister(ins.Name)
+		return nil
 	default:
-		return OpErr
+		return nil
 	}
 }
 
-//createMongo is used for deploy mongo instance based on the configuration m
+//createMongo is used for deploy mongo mongo instance based on the configuration m
 func (mm *MongoManager) createMongo(ins *Mongo) error {
 	defer Duration(time.Now(), "createMongo")
 
@@ -276,7 +181,7 @@ func (mm *MongoManager) createMongo(ins *Mongo) error {
 	}
 	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.Name)
 
-	//startup the mongodb instance by using docker
+	//startup the mongodb mongo instance by using docker
 	resp, err := mm.dockerMgr.createContainer(ins)
 	if err != nil {
 		glog.Errorf("run docker container failed: %s", err.Error())
@@ -285,12 +190,11 @@ func (mm *MongoManager) createMongo(ins *Mongo) error {
 
 	ins.ContainerID = resp.ID
 	mm.Send(ins)
-	glog.Infof("create docker container success, id: %s", ins.ContainerID)
+	glog.Infof("create docker container succeed, id: %s", ins.ContainerID)
 	return nil
 
 RECOVER:
 	os.RemoveAll(dataPath)
-	glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb.conf", ins.Name)
 	glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
 
 	return DeployErr
@@ -299,21 +203,23 @@ RECOVER:
 func (mm *MongoManager) startMongo(ins *Mongo) error {
 	defer Duration(time.Now(), "startMongo")
 
-	glog.Infof("starting mongo %s, container id %s", ins.Name, ins.ContainerID)
+	glog.Infof("starting mongo instance %s, container id %s", ins.Name, ins.ContainerID)
 	if err := mm.dockerMgr.startContainer(ins.ContainerID); err != nil {
-		glog.Errorf("start mongo %s and container id %s failed", ins.Name, ins.ContainerID)
+		glog.Errorf("start mongo instance %s and container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
 		return err
 	}
 
-	glog.Infof("starting mongo %s, container id %s success", ins.Name, ins.ContainerID)
+	glog.Infof("start mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
 	go mm.ma.monitorMgr.simpleCheckOneIns(ins.Name)
 	return nil
 }
 
 func (mm *MongoManager) stopMongo(ins *Mongo, force bool) error {
 	defer Duration(time.Now(), "stopMongo")
+
+	glog.Infof("stopping mongo instance %s, container id %s", ins.Name, ins.ContainerID)
 	if err := mm.shutdownMongo(ins, force); err != nil {
-		glog.Infof("shutdown mongo %s, container id %s", ins.Name, ins.ContainerID)
+		glog.Infof("stop mongo instance %s, container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
 		return err
 	}
 	/*
@@ -323,44 +229,54 @@ func (mm *MongoManager) stopMongo(ins *Mongo, force bool) error {
 			return err
 		}
 	*/
-	glog.Infof("shutdown mongo %s, container id %s success", ins.Name, ins.ContainerID)
+	glog.Infof("stop mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
 	go mm.ma.monitorMgr.simpleCheckOneIns(ins.Name)
 	return nil
 }
 
 func (mm *MongoManager) deleteMongo(ins *Mongo) error {
-	defer Duration(time.Now(), "stopMongo")
+	defer Duration(time.Now(), "deleteMongo")
 
-	glog.Infof("stopping mongo %s, container id %s", ins.Name, ins.ContainerID)
+	glog.Infof("stopping mongo instance %s, container id %s", ins.Name, ins.ContainerID)
 	if err := mm.dockerMgr.stopContainer(ins.ContainerID); err != nil {
-		glog.Errorf("stop mongo %s and container id %s failed", ins.Name, ins.ContainerID)
+		glog.Errorf("stop mongo instance %s and container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
 		return err
 	}
+	glog.Infof("stop mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
 
-	glog.Infof("stop mongo %s, container id %s success", ins.Name, ins.ContainerID)
+	glog.Infof("removing mongo instance %s, container id %s", ins.Name, ins.ContainerID)
+	if err := mm.dockerMgr.removeContainer(ins.ContainerID); err != nil {
+		glog.Errorf("remove mongo %s and container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
+		return err
+	}
+	glog.Infof("remove mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+
+	os.RemoveAll(ins.DataPath)
+	glog.Infof("remove mongo instance directory %s", ins.DataPath)
 	return nil
 
 }
 
 func (mm *MongoManager) shutdownMongo(ins *Mongo, force bool) error {
+	defer Duration(time.Now(), "shutdownMongo")
 	port := ins.Port
 	session, err := mgo.DialWithTimeout(fmt.Sprintf("mongodb://127.0.0.1:%d/admin", port), time.Duration(5)*time.Second)
 	if err != nil {
-		glog.Errorf("connect to mongodb %s failed, port %d, error: %v", ins.Name, port, err)
+		glog.Errorf("connect to mongo instance %s failed, port %d, error: %v", ins.Name, port, err)
 		return err
 	}
-	glog.Infof("connect to mongodb %s succeed, port %d", ins.Name, port)
+	glog.Infof("connect to mongo instance %s succeed, port %d", ins.Name, port)
 	defer session.Close()
 
 	var result bson.M
 	err = session.DB("admin").Run(bson.D{{"shutdown", 1}, {"force", force}}, &result)
 	if err != nil {
 		if err == io.EOF {
-			glog.Infof("send shutdown mongodb succeed, port %d", port)
-			glog.Infof("disconnect from mongodb %s after sending shutdown command", ins.Name)
+			glog.Infof("send shutdown mongo instance succeed, port %d", port)
+			glog.Infof("disconnect from mongo instance %s after sending shutdown command", ins.Name)
 			return nil
 		}
-		glog.Errorf("shutdown mongodb failed, port %d, error: %v, result: %v", port, err, result)
+		glog.Errorf("shutdown mongo instance failed, port %d, error: %v, result: %v", port, err, result)
 		return err
 	}
 	return nil
