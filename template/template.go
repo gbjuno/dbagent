@@ -1,30 +1,71 @@
 package template
 
 const (
-	Single = `net:
+	DOCKER_Single = `net:
   port: {{ .Port }}
 operationProfiling: {}
 processManagement:
-  fork: "false"
+  fork: false
+  pidFilePath: /data/mongodb-{{ .Name }}.pid
 storage:
-  dbPath: /data
+  dbPath: /data/mongodb-{{ .Name }}
   engine: wiredTiger
+  journal:
+     enabled: true
 systemLog:
   destination: file
-  path: /data/mongodb.log
+  path: /data/mongodb-{{ .Name }}.log
 `
-	Replset = `net:
+
+	DOCKER_Replset = `net:
   port: {{ .Port }}
 operationProfiling: {}
 processManagement:
-  fork: "false"
+  fork: false
+  pidFilePath: /data/mongodb-{{ .Name }}.pid
 replication:
   replSetName: {{ .Name }}
 storage:
-  dbPath: /data
+  dbPath: /data/mongodb-{{ .Name }}
   engine: wiredTiger
+  journal:
+     enabled: true
 systemLog:
   destination: file
-  path: /data/mongodb.log
+  path: /data/mongodb-{{ .Name }}.log
+`
+
+	NATIVE_Single = `net:
+  port: {{ .Port }}
+operationProfiling: {}
+processManagement:
+  fork: true
+  pidFilePath: {{ .DataPath }}/mongodb-{{ .Name }}.pid
+storage:
+  dbPath: {{ .DataPath }}/mongodb-{{ .Name }}
+  engine: wiredTiger
+  journal:
+     enabled: true
+systemLog:
+  destination: file
+  path: {{ .DataPath }}/mongodb-{{ .Name }}.log
+`
+
+	NATIVE_Replset = `net:
+  port: {{ .Port }}
+operationProfiling: {}
+processManagement:
+  fork: true
+  pidFilePath: {{ .DataPath }}/mongodb-{{ .Name }}.pid
+replication:
+  replSetName: {{ .Name }}
+storage:
+  dbPath: {{ .DataPath }}/mongodb-{{ .Name }}
+  engine: wiredTiger
+  journal:
+     enabled: true
+systemLog:
+  destination: file
+  path: {{ .DataPath }}/mongodb-{{ .Name }}.log
 `
 )
