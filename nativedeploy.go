@@ -4,6 +4,8 @@ import (
 	"fmt"
 	cfgTmpl "github.com/GBjuno/dbagent/template"
 	"github.com/golang/glog"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
 	"text/template"
@@ -13,7 +15,7 @@ import (
 )
 
 const (
-	binPath = "/usr/local/bin/mongod_"
+	binPath = "/usr/local/mongo-%s/"
 )
 
 type NativeDeployment struct {
@@ -26,13 +28,16 @@ func NewNativeDeploymenet(mm *MongoManager) *NativeDeployment {
 
 //func (n *NativeDeployment) stop(ins *Mongo) do nothing with create
 func (n *NativeDeployment) createMongo(ins *Mongo) error {
+	mconf := getMongoConfFromMongoInstance(ins)
 	defer Duration(time.Now(), "NATIVE_createMongo")
 
 	var err error
+	var osVer string
 	var initScript string
 	var initPath string
 	var f *os.File
 	var initF *os.File
+	var binF *os.File
 	var tmpl *template.Template
 	var tmplConf string
 	var now time.Time = time.Now()
@@ -99,21 +104,30 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.Name)
 
 	if _, err = os.Stat("/etc/redhat-release"); os.IsNotExist(err) {
+		osVer = "ubuntu"
 		initScript = "template/startupscript_ubuntu"
 		initPath = "/etc/init/mongodb-" + ins.Name
 	} else {
+		osVer = "centos"
 		initScript = "template/startupscript_centos"
 		initPath = "/etc/init.d/mongodb-" + ins.Name
 	}
 
+	if err = n.getMongoBinary(ins.Version, osVer); err != nil {
+		glog.Errorf("can not get binary file, version %s, err %v", ins.Version, err)
+		os.RemoveAll(dataPath)
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
+		return DeployErr
+	}
+
 	initF, err = os.OpenFile(initPath, os.O_RDWR|os.O_CREATE, 0755)
-	defer initF.Close()
 	if err != nil {
 		glog.Errorf("can not create startup script %s, err %v", initPath, err)
 		os.RemoveAll(dataPath)
 		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
 		return DeployErr
 	}
+	defer initF.Close()
 
 	tmpl, err = template.ParseFiles(initScript)
 	if err != nil {
@@ -134,6 +148,7 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 	}
 
 	glog.Infof("create startup script %s for mongo %s", initPath, ins.Name)
+
 	return nil
 }
 
@@ -149,7 +164,7 @@ func (n *NativeDeployment) startMongo(ins *Mongo) error {
 	glog.Infof("start mongo instance %s succeed, output %s", ins.Name, out)
 
 	/*
-		cmd := exec.Command(binPath+mconf.Version, "-f", mconf.DataPath+"/mongodb-"+ins.Name+".conf")
+		cmd := exec.Command(fmt.Sprintf(binPath,mconf.Version)+"mongod", "-f", mconf.DataPath+"/mongodb-"+ins.Name+".conf")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return err
@@ -227,5 +242,26 @@ func (n *NativeDeployment) killMongo(ins *Mongo) error {
 	}
 
 	glog.Infof("kill -9 mongo instance %s succeed, output %s", ins.Name, out)
+	return nil
+}
+
+func (n *NativeDeployment) getMongoBinary(mongoVer string, osVer string) error {
+	binUrl = fmt.Sprintf("10.2.86.104/mongo-source/mongodb-%s-%s.tar.gz", osVer, mongoVer)
+	if err := os.Stat(fmt.Sprintf(binPath, mongoVer)); os.IsExist(err) {
+		retur
+		resp, err := http.Get(binUrl)
+		if err != nil {
+			glog.Errorf("can not download mongo binary %s, err %v", binPath, err)
+			return err
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		f := fmt.Sprintf("/tmp/mongodb-%s-%s.tar.gz", osVer, mongoVer)
+		if err = ioutil.WriteFile(f, body, 0755); err != nil {
+			glog.Errorf("can not save download mongo binary %s, err %v", f, err)
+			return err
+		}
+	}
+
 	return nil
 }

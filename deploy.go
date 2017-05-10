@@ -19,6 +19,7 @@ type Deployment interface {
 type MongoConf struct {
 	Name     string
 	Env      []string
+	BasePath string
 	DataPath string
 	Version  string
 }
@@ -42,7 +43,7 @@ func NewDeployment(mm *MongoManager, d DeployType) Deployment {
 }
 
 func getMongoConfFromMongoInstance(ins *Mongo) *MongoConf {
-	conf := MongoConf{Name: ins.Name, DataPath: ins.DataPath, Version: ins.Version}
+	conf := MongoConf{Name: ins.Name, BasePath: ins.BasePath, DataPath: ins.DataPath, Version: ins.Version}
 	return &conf
 }
 

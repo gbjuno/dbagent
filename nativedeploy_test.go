@@ -26,3 +26,13 @@ func Test_createMongo(t *testing.T) {
 		t.Fatalf("create mongo using native deploy failed, err", err)
 	}
 }
+
+func Test_getMongoBinary(t *testing.T) {
+	n := &NativeDeployment{}
+	if err := n.getMongoBinary("3.2.13", "ubuntu"); err != nil {
+		t.Fatalf("getMongoBinary failed, err :%v", err)
+	}
+	if err := n.getMongoBinary("3.2.13", "centos"); err != nil {
+		t.Fatalf("getMongoBinary failed, err :%v", err)
+	}
+}
