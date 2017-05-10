@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	cfgTmpl "github.com/GBjuno/dbagent/template"
 	"github.com/golang/glog"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	binPath = "/usr/local/mongo-%s/"
+	binPath = "/usr/local/mongo-%s"
 )
 
 type NativeDeployment struct {
@@ -28,7 +29,6 @@ func NewNativeDeploymenet(mm *MongoManager) *NativeDeployment {
 
 //func (n *NativeDeployment) stop(ins *Mongo) do nothing with create
 func (n *NativeDeployment) createMongo(ins *Mongo) error {
-	mconf := getMongoConfFromMongoInstance(ins)
 	defer Duration(time.Now(), "NATIVE_createMongo")
 
 	var err error
@@ -37,7 +37,6 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 	var initPath string
 	var f *os.File
 	var initF *os.File
-	var binF *os.File
 	var tmpl *template.Template
 	var tmplConf string
 	var now time.Time = time.Now()
@@ -164,7 +163,7 @@ func (n *NativeDeployment) startMongo(ins *Mongo) error {
 	glog.Infof("start mongo instance %s succeed, output %s", ins.Name, out)
 
 	/*
-		cmd := exec.Command(fmt.Sprintf(binPath,mconf.Version)+"mongod", "-f", mconf.DataPath+"/mongodb-"+ins.Name+".conf")
+		cmd := exec.Command(fmt.Sprintf(binPath,mconf.Version)+"/mongod", "-f", mconf.DataPath+"/mongodb-"+ins.Name+".conf")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return err
@@ -246,22 +245,48 @@ func (n *NativeDeployment) killMongo(ins *Mongo) error {
 }
 
 func (n *NativeDeployment) getMongoBinary(mongoVer string, osVer string) error {
-	binUrl = fmt.Sprintf("10.2.86.104/mongo-source/mongodb-%s-%s.tar.gz", osVer, mongoVer)
-	if err := os.Stat(fmt.Sprintf(binPath, mongoVer)); os.IsExist(err) {
-		retur
-		resp, err := http.Get(binUrl)
-		if err != nil {
-			glog.Errorf("can not download mongo binary %s, err %v", binPath, err)
-			return err
-		}
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		f := fmt.Sprintf("/tmp/mongodb-%s-%s.tar.gz", osVer, mongoVer)
-		if err = ioutil.WriteFile(f, body, 0755); err != nil {
-			glog.Errorf("can not save download mongo binary %s, err %v", f, err)
-			return err
-		}
+	binUrl := fmt.Sprintf("http://127.0.0.1/mongo-source/mongodb-%s-%s.tar.gz", osVer, mongoVer)
+	f := fmt.Sprintf("/tmp/mongodb-%s-%s.tar.gz", osVer, mongoVer)
+	if _, err := os.Stat(fmt.Sprintf(binPath, mongoVer)); os.IsExist(err) {
+		return nil
 	}
+
+	resp, err := http.Get(binUrl)
+	if err != nil {
+		glog.Errorf("can not download mongo binary %s, err %v", binPath, err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		glog.Errorf("can not download mongo binary %s, status %s, err %v", binPath, resp.StatusCode, err)
+		return errors.New(fmt.Sprintf("download mongo binary failed, url %s, status %s", binUrl, resp.StatusCode))
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err = ioutil.WriteFile(f, body, 0644); err != nil {
+		glog.Errorf("can not save download mongo binary %s, err %v", f, err)
+		return err
+	}
+	glog.Errorf("save download mongo binary %s", f)
+
+	os.Chdir("/usr/local/")
+	cmd := exec.Command("tar", "-xf", f)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		os.RemoveAll(f)
+		glog.Errorf("cannot gunzip file %s, output %s, err %s", f, output, err)
+		return err
+	}
+	glog.Infof("gunzip file %s, output %s", f, output)
+
+	cmd = exec.Command("mv", fmt.Sprintf("/usr/local/mongodb-%s-%s", osVer, mongoVer), fmt.Sprintf(binPath, mongoVer))
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		os.RemoveAll(f)
+		os.RemoveAll(fmt.Sprintf("/usr/local/mongodb-%s-%s", osVer, mongoVer))
+		glog.Errorf("cannot move to /usr/local, output %s, err %s", output, err)
+		return err
+	}
+	glog.Infof("mongo %s binary is setup", mongoVer)
 
 	return nil
 }
