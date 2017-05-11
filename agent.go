@@ -42,7 +42,7 @@ var once sync.Once
 func NewMongoAgent() *MongoAgent {
 	defer Duration(time.Now(), "NewMongoAgent")
 	once.Do(func() {
-		mongoMgr := NewMongoManager(DOCKER)
+		mongoMgr := NewMongoManager(NATIVE)
 		monitorMgr := MonitorManager{insList: make([]string, 0), join: make(chan string), leave: make(chan string)}
 		mongoMap := make(map[string]*Mongo)
 		mongoAgent = &MongoAgent{mongoMap: mongoMap, mongoMgr: mongoMgr, monitorMgr: &monitorMgr}

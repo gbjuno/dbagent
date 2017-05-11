@@ -24,7 +24,7 @@ SYSCONFIG="/etc/sysconfig/mongodb-{{ .Name }}"
 # for now.  This can go away when this script stops supporting 1.8.
 DBPATH={{ .DataPath }}/mongodb-{{ .Name }}
 PIDFILE={{ .DataPath }}/mongodb-{{ .Name }}.pid
-mongod=/usr/local/bin/mongod_{{ .Version }}
+mongod=/usr/local/mongo-{{ .Version }}/mongod
 
 MONGO_USER=mongodb
 MONGO_GROUP=mongodb
@@ -45,7 +45,7 @@ fi
 
 start(){{ "{" }}
   echo -n $"Starting mongod: "
-  daemon --user "$MONGO_USER" $NUMACTL $mongod $OPTIONS
+  daemon --pidfile "$PIDFILE" --user "$MONGO_USER" $NUMACTL $mongod $OPTIONS
   RETVAL=$?
   echo
   [ $RETVAL -eq 0 ] && touch /var/lock/subsys/mongodb-{{ .Name }}

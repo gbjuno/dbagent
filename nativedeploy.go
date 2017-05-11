@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"text/template"
 	"time"
 	//"path"
-	//"strconv"
+	"strconv"
 )
 
 const (
@@ -53,11 +55,24 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		glog.Errorf("can not mkdir %s", dataPath)
 		return DeployErr
 	}
+	user, _ := user.Lookup("mongodb")
+	uid, _ := strconv.Atoi(user.Uid)
+	gid, _ := strconv.Atoi(user.Gid)
+
+	if err = os.Chown(dataPath, uid, gid); err != nil {
+		glog.Errorf("can not chown %s, uid %d, gid %d", dataPath, uid, gid)
+		return DeployErr
+	}
 
 	glog.Infof("create directory %s for mongo %s", dataPath, ins.Name)
 
 	if err = os.Mkdir(dataPath+"/mongodb-"+ins.Name, os.ModeDir|0755); err != nil {
 		glog.Errorf("can not mkdir %s", dataPath)
+		return DeployErr
+	}
+
+	if err = os.Chown(dataPath+"/mongodb-"+ins.Name, uid, gid); err != nil {
+		glog.Errorf("can not chown %s", dataPath)
 		return DeployErr
 	}
 
@@ -73,6 +88,11 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		glog.Errorf("can not create configuration file %s", dataPath+"/mongodb-"+ins.Name+".conf")
 		os.RemoveAll(dataPath)
 		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
+		return DeployErr
+	}
+
+	if err = os.Chown(dataPath+"/mongodb-"+ins.Name+".conf", uid, gid); err != nil {
+		glog.Errorf("can not chown %s", dataPath)
 		return DeployErr
 	}
 
@@ -102,13 +122,16 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 	}
 	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.Name)
 
+	pwd, _ := os.Getwd()
+
 	if _, err = os.Stat("/etc/redhat-release"); os.IsNotExist(err) {
 		osVer = "ubuntu"
-		initScript = "template/startupscript_ubuntu"
-		initPath = "/etc/init/mongodb-" + ins.Name
+		initScript = filepath.Join(pwd, "./template/startupscript_ubuntu")
+		initPath = "/etc/init/mongodb-" + ins.Name + ".conf"
 	} else {
 		osVer = "centos"
-		initScript = "template/startupscript_centos"
+		initPath = "/etc/init/mongodb-" + ins.Name
+		initScript = filepath.Join(pwd, "./template/startupscript_centos")
 		initPath = "/etc/init.d/mongodb-" + ins.Name
 	}
 
@@ -170,20 +193,20 @@ func (n *NativeDeployment) startMongo(ins *Mongo) error {
 		}
 		glog.Infof("start mongo instance %s succeed, output %s", ins.Name, out)
 	*/
-
+	time.Sleep(time.Duration(3) * time.Second)
 	file, err := os.Open(mconf.DataPath + "/mongodb-" + ins.Name + ".pid")
 	if err != nil {
-		glog.Errorf("cannot get the pidfile of mongo instance %s, err %s", ins.Name, err)
+		glog.Errorf("cannot get the pidfile of mongo instance %s, path %s, err %s", ins.Name, mconf.DataPath+"/mongodb-"+ins.Name+".pid", err)
 		return err
 	}
 
 	pid := make([]byte, 100)
-	_, err = file.Read(pid)
+	count, err := file.Read(pid)
 	if err != nil {
 		return err
 	}
 
-	ins.ContainerID = string(pid)
+	ins.ContainerID = string(pid[0 : count-1])
 	return nil
 }
 
@@ -210,33 +233,26 @@ func (n *NativeDeployment) stopMongo(ins *Mongo) error {
 
 //func (n *NativeDeployment) stop(ins *Mongo) do nothing with delete
 func (n *NativeDeployment) deleteMongo(ins *Mongo) error {
-	if err := n.killMongo(ins); err != nil {
-		glog.Infof("delete mongo instance %s failed", ins.Name)
-		return err
+	if err := n.stopMongo(ins); err != nil {
+		if err = n.killMongo(ins); err != nil {
+			glog.Infof("delete mongo instance %s failed", ins.Name)
+			return err
+		}
 	}
+	initScript := fmt.Sprintln("/etc/init/mongodb-%s.conf", ins.Name)
 	os.RemoveAll(ins.DataPath)
+	os.RemoveAll(initScript)
 	glog.Infof("delete mongo instance %s succeed", ins.Name)
 	glog.Infof("remove mongo instance directory %s", ins.DataPath)
 	return nil
 }
 
 func (n *NativeDeployment) killMongo(ins *Mongo) error {
-	mconf := getMongoConfFromMongoInstance(ins)
-	file, err := os.Open(mconf.DataPath + "/mongodb-" + ins.Name + ".pid")
-	if err != nil {
-		return err
-	}
 
-	pid := make([]byte, 100)
-	_, err = file.Read(pid)
-	if err != nil {
-		return err
-	}
-
-	cmd := exec.Command("kill", "-9", string(pid))
+	cmd := exec.Command("kill", "-9", ins.ContainerID)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		glog.Errorf("kill -9 mongo instance %s failed, output %s, err %v", ins.Name, out, err)
+		glog.Errorf("kill -9 mongo instance %s failed, pid %s, output %s, err %v", ins.Name, ins.ContainerID, out, err)
 		return err
 	}
 
@@ -245,48 +261,49 @@ func (n *NativeDeployment) killMongo(ins *Mongo) error {
 }
 
 func (n *NativeDeployment) getMongoBinary(mongoVer string, osVer string) error {
-	binUrl := fmt.Sprintf("http://127.0.0.1/mongo-source/mongodb-%s-%s.tar.gz", osVer, mongoVer)
+	binUrl := fmt.Sprintf("http://10.2.86.104/mongo-source/mongodb-%s-%s.tar.gz", osVer, mongoVer)
 	f := fmt.Sprintf("/tmp/mongodb-%s-%s.tar.gz", osVer, mongoVer)
-	if _, err := os.Stat(fmt.Sprintf(binPath, mongoVer)); os.IsExist(err) {
+	binPath := fmt.Sprintf(binPath, mongoVer)
+	if _, err := os.Stat(binPath); os.IsNotExist(err) {
+		resp, err := http.Get(binUrl)
+		if err != nil {
+			glog.Errorf("can not download mongo binary %s, err %v", binPath, err)
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			glog.Errorf("can not download mongo binary %s, status %s, err %v", binPath, resp.StatusCode, err)
+			return errors.New(fmt.Sprintf("download mongo binary failed, url %s, status %s", binUrl, resp.StatusCode))
+		}
+		body, err := ioutil.ReadAll(resp.Body)
+		if err = ioutil.WriteFile(f, body, 0644); err != nil {
+			glog.Errorf("can not save download mongo binary %s, err %v", f, err)
+			return err
+		}
+		glog.Errorf("save download mongo binary %s", f)
+
+		os.Chdir("/usr/local/")
+		cmd := exec.Command("tar", "-xf", f)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			os.RemoveAll(f)
+			glog.Errorf("cannot gunzip file %s, output %s, err %s", f, output, err)
+			return err
+		}
+		glog.Infof("gunzip file %s, output %s", f, output)
+
+		cmd = exec.Command("mv", fmt.Sprintf("/usr/local/mongodb-%s-%s", osVer, mongoVer), binPath)
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			os.RemoveAll(f)
+			os.RemoveAll(fmt.Sprintf("/usr/local/mongodb-%s-%s", osVer, mongoVer))
+			glog.Errorf("cannot move to /usr/local, output %s, err %s", output, err)
+			return err
+		}
+		glog.Infof("mongo %s binary is setup", mongoVer)
+	} else {
+		glog.Infof("%s is already setup", binPath)
 		return nil
 	}
-
-	resp, err := http.Get(binUrl)
-	if err != nil {
-		glog.Errorf("can not download mongo binary %s, err %v", binPath, err)
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		glog.Errorf("can not download mongo binary %s, status %s, err %v", binPath, resp.StatusCode, err)
-		return errors.New(fmt.Sprintf("download mongo binary failed, url %s, status %s", binUrl, resp.StatusCode))
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err = ioutil.WriteFile(f, body, 0644); err != nil {
-		glog.Errorf("can not save download mongo binary %s, err %v", f, err)
-		return err
-	}
-	glog.Errorf("save download mongo binary %s", f)
-
-	os.Chdir("/usr/local/")
-	cmd := exec.Command("tar", "-xf", f)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		os.RemoveAll(f)
-		glog.Errorf("cannot gunzip file %s, output %s, err %s", f, output, err)
-		return err
-	}
-	glog.Infof("gunzip file %s, output %s", f, output)
-
-	cmd = exec.Command("mv", fmt.Sprintf("/usr/local/mongodb-%s-%s", osVer, mongoVer), fmt.Sprintf(binPath, mongoVer))
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		os.RemoveAll(f)
-		os.RemoveAll(fmt.Sprintf("/usr/local/mongodb-%s-%s", osVer, mongoVer))
-		glog.Errorf("cannot move to /usr/local, output %s, err %s", output, err)
-		return err
-	}
-	glog.Infof("mongo %s binary is setup", mongoVer)
-
 	return nil
 }
