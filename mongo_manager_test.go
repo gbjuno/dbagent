@@ -33,7 +33,7 @@ func initial() *MongoAgent {
 			Role:        "SingleDB",
 			Port:        27000 + i,
 			CacheSizeMB: 10240,
-			Version:     "3.2.11",
+			Version:     "3.4.4",
 			Type:        SingleDB,
 			NextOp:      "CREATE",
 		}

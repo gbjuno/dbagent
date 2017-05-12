@@ -47,14 +47,26 @@ type locks struct {
 	Oplog      map[string]Lock `json:"oplog"`
 }
 
-type network struct {
+type Network struct {
 	BytesIn    int `json:"bytesIn"`
 	BytesOut   int `json:"bytesOut"`
 	NumRequest int `json:"numRequests"`
 }
 
 type Opcounters struct {
+	Insert  int `json:"insert"`
+	Query   int `json:"query"`
+	Update  int `json:"update"`
+	Delete  int `json:"delete"`
+	Getmore int `json:"getmore"`
+	Command int `json:"command"`
 }
 
 type OpcountersRepl struct {
+	Insert  int `json:"insert"`
+	Query   int `json:"query"`
+	Update  int `json:"update"`
+	Delete  int `json:"delete"`
+	Getmore int `json:"getmore"`
+	Command int `json:"command"`
 }

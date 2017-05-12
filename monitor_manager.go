@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	//"reflect"
 	"time"
 )
 
@@ -71,24 +73,44 @@ func (mon *MonitorManager) checkInsDetail(ctx context.Context, insNameCh <-chan 
 			glog.Infof("monitor worker exit because of ctx cancel")
 			break
 		case insName := <-insNameCh:
+			glog.Infof("checking on mongo instance %s", insName)
 			ins := mon.ma.mongoMap[insName]
-			conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Port))
-			if err != nil {
-				glog.Errorf("connect mongo instance %s failed", ins.Name)
-				glog.Errorf("mongo instance %s is not running", ins.Name)
-				ins.Running = false
-				mon.ma.mongoMgr.Send(ins)
-			}
-
-			var result bson.M
-			err = conn.DB("admin").Run(bson.D{{"serverStatus", 1}}, &result)
-			if err != nil {
-				glog.Infof("Mongo Server Status: %v", result)
-			}
-			conn.Close()
+			mon.getMongoStatus(ins)
 		}
 	}
 	glog.Infof("monitor worker exits")
+}
+
+func (mon *MonitorManager) getMongoStatus(ins *Mongo) {
+	conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Port))
+	if err != nil {
+		glog.Errorf("connect mongo instance %s failed", ins.Name)
+		glog.Errorf("mongo instance %s is not running", ins.Name)
+		ins.Running = false
+		mon.ma.mongoMgr.Send(ins)
+		return
+	}
+	var result bson.M
+	err = conn.DB("admin").Run(bson.D{{"serverStatus", 1}}, &result)
+	if err != nil {
+		glog.Infof("get Mongo Server Status failed, err %c", err)
+	}
+	glog.Infof("Mongo Server Status: %v", result)
+	defer conn.Close()
+	j, err := json.Marshal(result["network"])
+	if err != nil {
+		glog.Errorf("cannot marshal network")
+		return
+	}
+	v := &Network{}
+	if err != nil {
+		glog.Errorf("cannot unmarshal network")
+		return
+	}
+	err = json.Unmarshal(j, &v)
+	glog.Infof("network: %T %v", v, v)
+	glog.Infof("network: %T %v", result["network"], result["network"])
+	return
 }
 
 func (mon *MonitorManager) Register(insName string) {

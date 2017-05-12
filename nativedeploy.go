@@ -76,7 +76,7 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		return DeployErr
 	}
 
-	glog.Infof("create directory %s for mongo %s", dataPath, ins.Name)
+	glog.Infof("create directory %s for mongo %s", dataPath+"/mongodb-"+ins.Name, ins.Name)
 
 	ins.DataPath = dataPath
 
@@ -133,6 +133,13 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		initPath = "/etc/init/mongodb-" + ins.Name
 		initScript = filepath.Join(pwd, "./template/startupscript_centos")
 		initPath = "/etc/init.d/mongodb-" + ins.Name
+		if _, err = os.Stat("/usr/bin/systemctl"); os.IsNotExist(err) {
+			glog.Infof("os does not use systemd")
+		} else {
+			glog.Infof("os uses systemd, reloading initscript conf")
+			cmd := exec.Command("systemctl", "daemon-reload")
+			cmd.Start()
+		}
 	}
 
 	if err = n.getMongoBinary(ins.Version, osVer); err != nil {
