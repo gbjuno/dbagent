@@ -9,6 +9,7 @@ import (
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"os"
+	"teego/pkg/api"
 	"text/template"
 	"time"
 )
@@ -53,7 +54,7 @@ func (dockerDeploy *DockerDeployment) getTimeoutContext() (context.Context, cont
 	return context.WithTimeout(context.Background(), dockerDeploy.timeout)
 }
 
-func (dockerDeploy *DockerDeployment) createMongo(ins *Mongo) error {
+func (dockerDeploy *DockerDeployment) createMongo(ins *api.MongoInstance) error {
 	defer Duration(time.Now(), "DOCKER_createMongo")
 
 	var err error
@@ -61,11 +62,11 @@ func (dockerDeploy *DockerDeployment) createMongo(ins *Mongo) error {
 	var tmpl *template.Template
 	var tmplConf string
 	var now time.Time = time.Now()
-	var dataPath string = fmt.Sprintf("%s/%s_%04d%02d%02d_%02d%02d", ins.BasePath, ins.Name,
-		now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute())
+	var dataPath string = fmt.Sprintf("%s/%s_%04d%02d%02d_%02d%02d%04d", ins.Status.BasePath, ins.GetName(),
+		now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Nanosecond())
 
-	if _, err := os.Stat(ins.BasePath); os.IsNotExist(err) {
-		glog.Errorf("BasePath %s does not exist", ins.BasePath)
+	if _, err := os.Stat(ins.Status.BasePath); os.IsNotExist(err) {
+		glog.Errorf("BasePath %s does not exist", ins.Status.BasePath)
 		return DeployErr
 	}
 
@@ -75,41 +76,38 @@ func (dockerDeploy *DockerDeployment) createMongo(ins *Mongo) error {
 		return DeployErr
 	}
 
-	if err = os.Mkdir(dataPath+"/mongodb-"+ins.Name, os.ModeDir|0755); err != nil {
-		glog.Errorf("can not mkdir %s", dataPath+"/mongodb-"+ins.Name)
+	if err = os.Mkdir(dataPath+"/mongodb-"+ins.GetName(), os.ModeDir|0755); err != nil {
+		glog.Errorf("can not mkdir %s", dataPath+"/mongodb-"+ins.GetName())
 		return DeployErr
 	}
 
-	glog.Infof("create directory %s for mongo %s", dataPath, ins.Name)
-	ins.DataPath = dataPath
+	glog.Infof("create directory %s for mongo %s", dataPath, ins.GetName())
+	ins.Status.DataPath = dataPath
 
 	//create configuration file
-	glog.Infof("creating configuration file mongodb.conf for mongo %s", ins.Name)
-	f, err = os.OpenFile(dataPath+"/mongodb-"+ins.Name+".conf", os.O_RDWR|os.O_CREATE, 0755)
+	glog.Infof("creating configuration file mongodb.conf for mongo %s", ins.GetName())
+	f, err = os.OpenFile(dataPath+"/mongodb-"+ins.GetName()+".conf", os.O_RDWR|os.O_CREATE, 0755)
 	defer f.Close()
 	if err != nil {
-		glog.Errorf("can not create configuration file %s", dataPath+"/mongodb-"+ins.Name+".conf")
+		glog.Errorf("can not create configuration file %s", dataPath+"/mongodb-"+ins.GetName()+".conf")
 		os.RemoveAll(dataPath)
-		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb-"+ins.Name+".conf", ins.Name)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.Name+".conf")
+		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb-"+ins.GetName()+".conf", ins.GetName())
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
 
-	switch ins.Type {
-	case SingleDB:
+	if ins.Spec.Replication == "" {
 		tmplConf = cfgTmpl.DOCKER_Single
-	case ReplsetDB:
+	} else {
 		tmplConf = cfgTmpl.DOCKER_Replset
-	default:
-		tmplConf = cfgTmpl.DOCKER_Single
 	}
 
 	tmpl, err = template.New("db").Parse(tmplConf)
 	if err != nil {
 		glog.Errorf("can not template %d", tmplConf)
 		os.RemoveAll(dataPath)
-		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb-"+ins.Name+".conf", ins.Name)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.Name+".conf")
+		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb-"+ins.GetName()+".conf", ins.GetName())
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
 
@@ -117,11 +115,11 @@ func (dockerDeploy *DockerDeployment) createMongo(ins *Mongo) error {
 	if err != nil {
 		glog.Errorf("can not template %d", tmplConf)
 		os.RemoveAll(dataPath)
-		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb-"+ins.Name+".conf", ins.Name)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.Name+".conf")
+		glog.Infof("template file %s for mongo %s failed", dataPath+"/mongodb-"+ins.GetName()+".conf", ins.GetName())
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
-	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.Name)
+	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.GetName())
 
 	//startup the mongodb mongo instance by using docker
 	resp, err := dockerDeploy.createContainer(ins)
@@ -130,77 +128,77 @@ func (dockerDeploy *DockerDeployment) createMongo(ins *Mongo) error {
 		goto RECOVER
 	}
 
-	ins.ContainerID = resp.ID
-	dockerDeploy.mm.Send(ins)
-	glog.Infof("create docker container succeed, id: %s", ins.ContainerID)
+	ins.Status.Pid = resp.ID
+	dockerDeploy.mm.ma.GO_UpdateMongoInstance(ins)
+	glog.Infof("create docker container succeed, id: %s", ins.Status.Pid)
 	return nil
 
 RECOVER:
 	os.RemoveAll(dataPath)
-	glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.Name+".conf")
+	glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb-"+ins.GetName()+".conf")
 
 	return DeployErr
 }
 
-func (dockerDeploy *DockerDeployment) startMongo(ins *Mongo) error {
+func (dockerDeploy *DockerDeployment) startMongo(ins *api.MongoInstance) error {
 	defer Duration(time.Now(), "DOCKER_startMongo")
 
-	glog.Infof("starting mongo instance %s, container id %s", ins.Name, ins.ContainerID)
-	if err := dockerDeploy.startContainer(ins.ContainerID); err != nil {
-		glog.Errorf("start mongo instance %s and container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
+	glog.Infof("starting mongo instance %s, container id %s", ins.GetName(), ins.Status.Pid)
+	if err := dockerDeploy.startContainer(ins.Status.Pid); err != nil {
+		glog.Errorf("start mongo instance %s and container id %s failed, err: %v", ins.GetName(), ins.Status.Pid, err)
 		return err
 	}
 
-	glog.Infof("start mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
-	go dockerDeploy.mm.ma.monitorMgr.simpleCheckOneIns(ins.Name)
+	glog.Infof("start mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
+	go dockerDeploy.mm.ma.monitorMgr.simpleCheckOneIns(ins.GetName())
 	return nil
 }
 
-func (dockerDeploy *DockerDeployment) stopMongo(ins *Mongo) error {
+func (dockerDeploy *DockerDeployment) stopMongo(ins *api.MongoInstance) error {
 	defer Duration(time.Now(), "DOCKER_stopMongo")
 	force := false
 
-	glog.Infof("stopping mongo instance %s, container id %s", ins.Name, ins.ContainerID)
+	glog.Infof("stopping mongo instance %s, container id %s", ins.GetName(), ins.Status.Pid)
 	if err := shutdownMongo(ins, force); err != nil {
-		glog.Infof("stop mongo instance %s, container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
+		glog.Infof("stop mongo instance %s, container id %s failed, err: %v", ins.GetName(), ins.Status.Pid, err)
 		return err
 	}
 	/*
-		glog.Infof("stopping mongo %s, container id %s", ins.Name, ins.ContainerID)
-		if err := dockerMgr.stopContainer(ins.ContainerID); err != nil {
-			glog.Errorf("stop mongo %s and container id %s failed", ins.Name, ins.ContainerID)
+		glog.Infof("stopping mongo %s, container id %s", ins.GetName(), ins.Status.Pid)
+		if err := dockerMgr.stopContainer(ins.Status.Pid); err != nil {
+			glog.Errorf("stop mongo %s and container id %s failed", ins.GetName(), ins.Status.Pid)
 			return err
 		}
 	*/
-	glog.Infof("stop mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
-	go dockerDeploy.mm.ma.monitorMgr.simpleCheckOneIns(ins.Name)
+	glog.Infof("stop mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
+	go dockerDeploy.mm.ma.monitorMgr.simpleCheckOneIns(ins.GetName())
 	return nil
 }
 
-func (dockerDeploy *DockerDeployment) deleteMongo(ins *Mongo) error {
+func (dockerDeploy *DockerDeployment) deleteMongo(ins *api.MongoInstance) error {
 	defer Duration(time.Now(), "DOCKER_deleteMongo")
 
-	glog.Infof("stopping mongo instance %s, container id %s", ins.Name, ins.ContainerID)
-	if err := dockerDeploy.stopContainer(ins.ContainerID); err != nil {
-		glog.Errorf("stop mongo instance %s and container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
+	glog.Infof("stopping mongo instance %s, container id %s", ins.GetName(), ins.Status.Pid)
+	if err := dockerDeploy.stopContainer(ins.Status.Pid); err != nil {
+		glog.Errorf("stop mongo instance %s and container id %s failed, err: %v", ins.GetName(), ins.Status.Pid, err)
 		return err
 	}
-	glog.Infof("stop mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+	glog.Infof("stop mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
 
-	glog.Infof("removing mongo instance %s, container id %s", ins.Name, ins.ContainerID)
-	if err := dockerDeploy.removeContainer(ins.ContainerID); err != nil {
-		glog.Errorf("remove mongo %s and container id %s failed, err: %v", ins.Name, ins.ContainerID, err)
+	glog.Infof("removing mongo instance %s, container id %s", ins.GetName(), ins.Status.Pid)
+	if err := dockerDeploy.removeContainer(ins.Status.Pid); err != nil {
+		glog.Errorf("remove mongo %s and container id %s failed, err: %v", ins.GetName(), ins.Status.Pid, err)
 		return err
 	}
-	glog.Infof("remove mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+	glog.Infof("remove mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
 
-	os.RemoveAll(ins.DataPath)
-	glog.Infof("remove mongo instance directory %s", ins.DataPath)
+	os.RemoveAll(ins.Status.DataPath)
+	glog.Infof("remove mongo instance directory %s", ins.Status.DataPath)
 	return nil
 
 }
 
-func (dockerDeploy *DockerDeployment) createContainer(ins *Mongo) (*container.ContainerCreateCreatedBody, error) {
+func (dockerDeploy *DockerDeployment) createContainer(ins *api.MongoInstance) (*container.ContainerCreateCreatedBody, error) {
 	mconf := getMongoConfFromMongoInstance(ins)
 	ctx, cancel := dockerDeploy.getTimeoutContext()
 	defer cancel()

@@ -2,70 +2,70 @@ package template
 
 const (
 	DOCKER_Single = `net:
-  port: {{ .Port }}
+  port: {{ .Spec.Port }}
 operationProfiling: {}
 processManagement:
   fork: false
-  pidFilePath: /data/mongodb-{{ .Name }}.pid
+  pidFilePath: /data/mongodb-{{ .GetName }}.pid
 storage:
-  dbPath: /data/mongodb-{{ .Name }}
+  dbPath: /data/mongodb-{{ .GetName }}
   engine: wiredTiger
   journal:
      enabled: true
 systemLog:
   destination: file
-  path: /data/mongodb-{{ .Name }}.log
+  path: /data/mongodb-{{ .GetName }}.log
 `
 
 	DOCKER_Replset = `net:
-  port: {{ .Port }}
+  port: {{ .Spec.Port }}
 operationProfiling: {}
 processManagement:
   fork: false
-  pidFilePath: /data/mongodb-{{ .Name }}.pid
+  pidFilePath: /data/mongodb-{{ .GetName }}.pid
 replication:
-  replSetName: {{ .Name }}
+  replSetName: {{ .GetName }}
 storage:
-  dbPath: /data/mongodb-{{ .Name }}
+  dbPath: /data/mongodb-{{ .GetName }}
   engine: wiredTiger
   journal:
      enabled: true
 systemLog:
   destination: file
-  path: /data/mongodb-{{ .Name }}.log
+  path: /data/mongodb-{{ .GetName }}.log
 `
 
 	NATIVE_Single = `net:
-  port: {{ .Port }}
+  port: {{ .Spec.Port }}
 operationProfiling: {}
 processManagement:
   fork: true
-  pidFilePath: {{ .DataPath }}/mongodb-{{ .Name }}.pid
+  pidFilePath: {{ .Status.DataPath }}/mongodb-{{ .GetName }}.pid
 storage:
-  dbPath: {{ .DataPath }}/mongodb-{{ .Name }}
+  dbPath: {{ .Status.DataPath }}/mongodb-{{ .GetName }}
   engine: wiredTiger
   journal:
      enabled: true
 systemLog:
   destination: file
-  path: {{ .DataPath }}/mongodb-{{ .Name }}.log
+  path: {{ .Status.DataPath }}/mongodb-{{ .GetName }}.log
 `
 
 	NATIVE_Replset = `net:
-  port: {{ .Port }}
+  port: {{ .Spec.Port }}
 operationProfiling: {}
 processManagement:
   fork: true
-  pidFilePath: {{ .DataPath }}/mongodb-{{ .Name }}.pid
+  pidFilePath: {{ .Status.DataPath }}/mongodb-{{ .GetName }}.pid
 replication:
-  replSetName: {{ .Name }}
+  replSetName: {{ .GetName }}
 storage:
-  dbPath: {{ .DataPath }}/mongodb-{{ .Name }}
+  dbPath: {{ .Status.DataPath }}/mongodb-{{ .GetName }}
   engine: wiredTiger
   journal:
      enabled: true
 systemLog:
   destination: file
-  path: {{ .DataPath }}/mongodb-{{ .Name }}.log
+  path: {{ .Status.DataPath }}/mongodb-{{ .GetName }}.log
 `
 )

@@ -6,14 +6,15 @@ import (
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"io"
+	"teego/pkg/api"
 	"time"
 )
 
 type Deployment interface {
-	createMongo(*Mongo) error
-	startMongo(*Mongo) error
-	stopMongo(*Mongo) error
-	deleteMongo(*Mongo) error
+	createMongo(*api.MongoInstance) error
+	startMongo(*api.MongoInstance) error
+	stopMongo(*api.MongoInstance) error
+	deleteMongo(*api.MongoInstance) error
 }
 
 type MongoConf struct {
@@ -42,14 +43,14 @@ func NewDeployment(mm *MongoManager, d DeployType) Deployment {
 	}
 }
 
-func getMongoConfFromMongoInstance(ins *Mongo) *MongoConf {
-	conf := MongoConf{Name: ins.Name, BasePath: ins.BasePath, DataPath: ins.DataPath, Version: ins.Version}
+func getMongoConfFromMongoInstance(ins *api.MongoInstance) *MongoConf {
+	conf := MongoConf{Name: ins.GetName(), BasePath: ins.Status.BasePath, DataPath: ins.Status.DataPath, Version: ins.Spec.Version}
 	return &conf
 }
 
-func shutdownMongo(ins *Mongo, force bool) error {
+func shutdownMongo(ins *api.MongoInstance, force bool) error {
 	defer Duration(time.Now(), "shutdownMongo")
-	port := ins.Port
+	port := ins.Spec.Port
 	session, err := mgo.DialWithTimeout(fmt.Sprintf("mongodb://127.0.0.1:%d/admin", port), time.Duration(5)*time.Second)
 	if err != nil {
 		glog.Errorf("connect to mongo instance %s failed, port %d, error: %v", ins.Name, port, err)

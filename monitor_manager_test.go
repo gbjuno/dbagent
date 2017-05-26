@@ -11,7 +11,7 @@ import (
 func Test_checkInsDetail(t *testing.T) {
 	mongoAgent := initial()
 	ins := mongoAgent.mongoMap["test1"]
-	ins.Status = CREATING
+	ins.Status.Status = CREATING
 	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("create a mongo instance failed")
 	}

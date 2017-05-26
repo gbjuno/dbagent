@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"teego/pkg/api"
 	"text/template"
 	"time"
 	//"path"
@@ -30,7 +31,7 @@ func NewNativeDeploymenet(mm *MongoManager) *NativeDeployment {
 }
 
 //func (n *NativeDeployment) stop(ins *Mongo) do nothing with create
-func (n *NativeDeployment) createMongo(ins *Mongo) error {
+func (n *NativeDeployment) createMongo(ins *api.MongoInstance) error {
 	defer Duration(time.Now(), "NATIVE_createMongo")
 
 	var err error
@@ -42,11 +43,11 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 	var tmpl *template.Template
 	var tmplConf string
 	var now time.Time = time.Now()
-	var dataPath string = fmt.Sprintf("%s/%s_%04d%02d%02d_%02d%02d", ins.BasePath, ins.Name,
-		now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute())
+	var dataPath string = fmt.Sprintf("%s/%s_%04d%02d%02d_%02d%02d%04d", ins.Status.BasePath, ins.GetName(),
+		now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Nanosecond())
 
-	if _, err := os.Stat(ins.BasePath); os.IsNotExist(err) {
-		glog.Errorf("BasePath %s does not exist", ins.BasePath)
+	if _, err := os.Stat(ins.Status.BasePath); os.IsNotExist(err) {
+		glog.Errorf("BasePath %s does not exist", ins.Status.BasePath)
 		return DeployErr
 	}
 
@@ -64,52 +65,49 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		return DeployErr
 	}
 
-	glog.Infof("create directory %s for mongo %s", dataPath, ins.Name)
+	glog.Infof("create directory %s for mongo %s", dataPath, ins.GetName())
 
-	if err = os.Mkdir(dataPath+"/mongodb-"+ins.Name, os.ModeDir|0755); err != nil {
+	if err = os.Mkdir(dataPath+"/mongodb-"+ins.GetName(), os.ModeDir|0755); err != nil {
 		glog.Errorf("can not mkdir %s", dataPath)
 		return DeployErr
 	}
 
-	if err = os.Chown(dataPath+"/mongodb-"+ins.Name, uid, gid); err != nil {
+	if err = os.Chown(dataPath+"/mongodb-"+ins.GetName(), uid, gid); err != nil {
 		glog.Errorf("can not chown %s", dataPath)
 		return DeployErr
 	}
 
-	glog.Infof("create directory %s for mongo %s", dataPath+"/mongodb-"+ins.Name, ins.Name)
+	glog.Infof("create directory %s for mongo %s", dataPath+"/mongodb-"+ins.GetName(), ins.GetName())
 
-	ins.DataPath = dataPath
+	ins.Status.DataPath = dataPath
 
 	//create configuration file
-	glog.Infof("creating configuration file mongodb.conf for mongo %s", ins.Name)
-	f, err = os.OpenFile(dataPath+"/mongodb-"+ins.Name+".conf", os.O_RDWR|os.O_CREATE, 0755)
+	glog.Infof("creating configuration file mongodb.conf for mongo %s", ins.GetName())
+	f, err = os.OpenFile(dataPath+"/mongodb-"+ins.GetName()+".conf", os.O_RDWR|os.O_CREATE, 0755)
 	defer f.Close()
 	if err != nil {
-		glog.Errorf("can not create configuration file %s", dataPath+"/mongodb-"+ins.Name+".conf")
+		glog.Errorf("can not create configuration file %s", dataPath+"/mongodb-"+ins.GetName()+".conf")
 		os.RemoveAll(dataPath)
 		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
 		return DeployErr
 	}
 
-	if err = os.Chown(dataPath+"/mongodb-"+ins.Name+".conf", uid, gid); err != nil {
+	if err = os.Chown(dataPath+"/mongodb-"+ins.GetName()+".conf", uid, gid); err != nil {
 		glog.Errorf("can not chown %s", dataPath)
 		return DeployErr
 	}
 
-	switch ins.Type {
-	case SingleDB:
+	if ins.Spec.Replication == "" {
 		tmplConf = cfgTmpl.NATIVE_Single
-	case ReplsetDB:
+	} else {
 		tmplConf = cfgTmpl.NATIVE_Replset
-	default:
-		tmplConf = cfgTmpl.NATIVE_Single
 	}
 
 	tmpl, err = template.New("db").Parse(tmplConf)
 	if err != nil {
 		glog.Errorf("can not template %d, err %v", tmplConf, err)
 		os.RemoveAll(dataPath)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.Name+".conf")
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
 
@@ -117,22 +115,22 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 	if err != nil {
 		glog.Errorf("can not template %d, err %v", tmplConf, err)
 		os.RemoveAll(dataPath)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.Name+".conf")
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
-	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.Name)
+	glog.Infof("create file %s for mongo %s", dataPath+"/mongodb.conf", ins.GetName())
 
 	pwd, _ := os.Getwd()
 
 	if _, err = os.Stat("/etc/redhat-release"); os.IsNotExist(err) {
 		osVer = "ubuntu"
 		initScript = filepath.Join(pwd, "./template/startupscript_ubuntu")
-		initPath = "/etc/init/mongodb-" + ins.Name + ".conf"
+		initPath = "/etc/init/mongodb-" + ins.GetName() + ".conf"
 	} else {
 		osVer = "centos"
-		initPath = "/etc/init/mongodb-" + ins.Name
+		initPath = "/etc/init/mongodb-" + ins.GetName()
 		initScript = filepath.Join(pwd, "./template/startupscript_centos")
-		initPath = "/etc/init.d/mongodb-" + ins.Name
+		initPath = "/etc/init.d/mongodb-" + ins.GetName()
 		if _, err = os.Stat("/usr/bin/systemctl"); os.IsNotExist(err) {
 			glog.Infof("os does not use systemd")
 		} else {
@@ -142,8 +140,8 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		}
 	}
 
-	if err = n.getMongoBinary(ins.Version, osVer); err != nil {
-		glog.Errorf("can not get binary file, version %s, err %v", ins.Version, err)
+	if err = n.getMongoBinary(ins.Spec.Version, osVer); err != nil {
+		glog.Errorf("can not get binary file, version %s, err %v", ins.Spec.Version, err)
 		os.RemoveAll(dataPath)
 		glog.Infof("remove dir %s and file %s to recover status", dataPath, "mongodb.conf")
 		return DeployErr
@@ -163,7 +161,7 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		glog.Errorf("can not template startup script %s, err %v", initScript, err)
 		os.RemoveAll(dataPath)
 		os.RemoveAll(initPath)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.Name+".conf")
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
 
@@ -172,38 +170,38 @@ func (n *NativeDeployment) createMongo(ins *Mongo) error {
 		glog.Errorf("can not template startup script %s, err %v", initScript, err)
 		os.RemoveAll(dataPath)
 		os.RemoveAll(initPath)
-		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.Name+".conf")
+		glog.Infof("remove dir %s and file %s to recover status", dataPath, "/mongodb-"+ins.GetName()+".conf")
 		return DeployErr
 	}
 
-	glog.Infof("create startup script %s for mongo %s", initPath, ins.Name)
+	glog.Infof("create startup script %s for mongo %s", initPath, ins.GetName())
 
 	return nil
 }
 
 //func (n *nativceDeploy) start(*Mongo) (interface{}, error) is used to deploy mongodb using binary
-func (n *NativeDeployment) startMongo(ins *Mongo) error {
+func (n *NativeDeployment) startMongo(ins *api.MongoInstance) error {
 	mconf := getMongoConfFromMongoInstance(ins)
-	cmd := exec.Command("service", "mongodb-"+ins.Name, "start")
+	cmd := exec.Command("service", "mongodb-"+ins.GetName(), "start")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		glog.Infof("start mongo instance %s failed, output %s", ins.Name, out)
+		glog.Infof("start mongo instance %s failed, output %s", ins.GetName(), out)
 		return err
 	}
-	glog.Infof("start mongo instance %s succeed, output %s", ins.Name, out)
+	glog.Infof("start mongo instance %s succeed, output %s", ins.GetName(), out)
 
 	/*
-		cmd := exec.Command(fmt.Sprintf(binPath,mconf.Version)+"/mongod", "-f", mconf.DataPath+"/mongodb-"+ins.Name+".conf")
+		cmd := exec.Command(fmt.Sprintf(binPath,mconf.Version)+"/mongod", "-f", mconf.DataPath+"/mongodb-"+ins.GetName()+".conf")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return err
 		}
-		glog.Infof("start mongo instance %s succeed, output %s", ins.Name, out)
+		glog.Infof("start mongo instance %s succeed, output %s", ins.GetName(), out)
 	*/
 	time.Sleep(time.Duration(3) * time.Second)
-	file, err := os.Open(mconf.DataPath + "/mongodb-" + ins.Name + ".pid")
+	file, err := os.Open(mconf.DataPath + "/mongodb-" + ins.GetName() + ".pid")
 	if err != nil {
-		glog.Errorf("cannot get the pidfile of mongo instance %s, path %s, err %s", ins.Name, mconf.DataPath+"/mongodb-"+ins.Name+".pid", err)
+		glog.Errorf("cannot get the pidfile of mongo instance %s, path %s, err %s", ins.GetName(), mconf.DataPath+"/mongodb-"+ins.GetName()+".pid", err)
 		return err
 	}
 
@@ -213,57 +211,52 @@ func (n *NativeDeployment) startMongo(ins *Mongo) error {
 		return err
 	}
 
-	ins.ContainerID = string(pid[0 : count-1])
+	ins.Status.Pid = string(pid[0 : count-1])
 	return nil
 }
 
 //func (n *NativeDeployment) stop(ins *Mongo) is used to kill mongodb process
-func (n *NativeDeployment) stopMongo(ins *Mongo) error {
+func (n *NativeDeployment) stopMongo(ins *api.MongoInstance) error {
 	if err := shutdownMongo(ins, false); err != nil {
-		glog.Errorf("stop mongo instance %s failed, output", ins.Name)
+		glog.Errorf("stop mongo instance %s failed, output", ins.GetName())
 		return err
 	}
-	glog.Errorf("stop mongo instance %s succeed, output", ins.Name)
+	glog.Errorf("stop mongo instance %s succeed, output", ins.GetName())
 	return nil
 	/*
 		mconf := getMongoConfFromMongoInstance(ins)
-		cmd := exec.Command("service", "mongodb-"+ins.Name, "stop")
+		cmd := exec.Command("service", "mongodb-"+ins.GetName(), "stop")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			glog.Errorf("stop mongo instance %s failed, output %s", ins.Name, out)
+			glog.Errorf("stop mongo instance %s failed, output %s", ins.GetName(), out)
 			return err
 		}
-		glog.Infof("stop mongo instance %s succeed, output %s", ins.Name, out)
+		glog.Infof("stop mongo instance %s succeed, output %s", ins.GetName(), out)
 		return nil
 	*/
 }
 
 //func (n *NativeDeployment) stop(ins *Mongo) do nothing with delete
-func (n *NativeDeployment) deleteMongo(ins *Mongo) error {
+func (n *NativeDeployment) deleteMongo(ins *api.MongoInstance) error {
 	if err := n.stopMongo(ins); err != nil {
 		if err = n.killMongo(ins); err != nil {
-			glog.Infof("delete mongo instance %s failed", ins.Name)
+			glog.Infof("delete mongo instance %s failed", ins.GetName())
 			return err
 		}
 	}
-	initScript := fmt.Sprintln("/etc/init/mongodb-%s.conf", ins.Name)
-	os.RemoveAll(ins.DataPath)
+	initScript := fmt.Sprintln("/etc/init/mongodb-%s.conf", ins.GetName())
+	os.RemoveAll(ins.Status.DataPath)
 	os.RemoveAll(initScript)
-	glog.Infof("delete mongo instance %s succeed", ins.Name)
-	glog.Infof("remove mongo instance directory %s", ins.DataPath)
+	glog.Infof("delete mongo instance %s succeed", ins.GetName())
+	glog.Infof("remove mongo instance directory %s", ins.Status.DataPath)
 	return nil
 }
 
-func (n *NativeDeployment) killMongo(ins *Mongo) error {
+func (n *NativeDeployment) killMongo(ins *api.MongoInstance) error {
 
-	cmd := exec.Command("kill", "-9", ins.ContainerID)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		glog.Errorf("kill -9 mongo instance %s failed, pid %s, output %s, err %v", ins.Name, ins.ContainerID, out, err)
-		return err
-	}
-
-	glog.Infof("kill -9 mongo instance %s succeed, output %s", ins.Name, out)
+	cmd := exec.Command("kill", "-9", ins.Status.Pid)
+	out, _ := cmd.CombinedOutput()
+	glog.Infof("kill -9 mongo instance %s succeed, output %s", ins.GetName(), out)
 	return nil
 }
 

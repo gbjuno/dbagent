@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"github.com/golang/glog"
+	"teego/pkg/api"
 	"time"
 )
 
@@ -27,80 +29,85 @@ func NewMongoManager(d DeployType) *MongoManager {
 	return mongoMgr
 }
 
-func (mm *MongoManager) Send(ins *Mongo) error {
-	glog.Infof("flash mongo struct %s, currentOp: %s", ins.Name, ins.Status)
-	return nil
-}
-
-func (mm *MongoManager) GO_Handle(ins *Mongo) error {
+func (mm *MongoManager) GO_Handle(ins *api.MongoInstance) error {
 	Duration(time.Now(), "GO_Handler")
-	glog.Infof("MongoManager GO_Handle, mongo instance: %s, Status: %s", ins.Name, ins.Status)
+	glog.Infof("MongoManager GO_Handle, mongo instance: %s, Status: %s", ins.GetName(), ins.Status.Status)
 	var err error
-	ins.locker.Lock()
-	defer ins.locker.Unlock()
-	switch ins.Status {
+	mm.ma.mapLock[ins.GetName()].Lock()
+	defer mm.ma.mapLock[ins.GetName()].Unlock()
+	switch ins.Status.Status {
 	case CREATING:
-		glog.Infof("creating mongo instance %s", ins.Name)
+		glog.Infof("creating mongo instance %s", ins.GetName())
 		if err = mm.createMongo(ins); err != nil {
-			ins.Status = ERROR
-			mm.Send(ins)
-			glog.Errorf("mongo instance %s created failed", ins.Name)
+			ins.Status.Status = ERROR
+			ins.Status.Message = err.Error()
+			go mm.ma.GO_UpdateMongoInstance(ins)
+			glog.Errorf("mongo instance %s created failed", ins.GetName())
 			return err
 		}
 		if err = mm.startMongo(ins); err != nil {
-			ins.Status = ERROR
-			glog.Errorf("mongo instance %s started failed", ins.Name)
+			ins.Status.Status = ERROR
+			ins.Status.Message = err.Error()
+			go mm.ma.GO_UpdateMongoInstance(ins)
+			glog.Errorf("mongo instance %s started failed", ins.GetName())
 			return err
 		}
-		ins.Status = RUNNING
-		mm.Send(ins)
-		glog.Infof("create mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
-		mm.ma.monitorMgr.Register(ins.Name)
+		ins.Status.Status = RUNNING
+		ins.Status.Message = fmt.Sprintf("mongo instance %s has been created and is running", ins.GetName())
+		go mm.ma.GO_UpdateMongoInstance(ins)
+		glog.Infof("create mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
+		mm.ma.monitorMgr.Register(ins.GetName())
 		return nil
 	case STARTING:
-		glog.Infof("starting mongo instance %s, container id %s", ins.Name, ins.ContainerID)
+		glog.Infof("starting mongo instance %s, container id %s", ins.GetName(), ins.Status.Pid)
 		for i := 0; i < MAXTRY; i++ {
 			if err = mm.startMongo(ins); err == nil {
-				ins.Status = RUNNING
-				mm.Send(ins)
-				glog.Infof("start mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+				ins.Status.Status = RUNNING
+				ins.Status.Message = fmt.Sprintf("mongo instance %s has been started and is running", ins.GetName())
+				go mm.ma.GO_UpdateMongoInstance(ins)
+				glog.Infof("start mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
 				return nil
 			}
 		}
-		ins.Status = ERROR
-		mm.Send(ins)
-		glog.Errorf("start mongo instance %s, container id %s failed", ins.Name, ins.ContainerID)
+		ins.Status.Status = ERROR
+		ins.Status.Message = err.Error()
+		go mm.ma.GO_UpdateMongoInstance(ins)
+		glog.Errorf("start mongo instance %s, container id %s failed", ins.GetName(), ins.Status.Pid)
 		return err
 	case STOPPING:
-		glog.Infof("stopping mongo instance %s, container id %s", ins.Name, ins.ContainerID)
+		glog.Infof("stopping mongo instance %s, container id %s", ins.GetName(), ins.Status.Pid)
 		for i := 0; i < MAXTRY; i++ {
 			if err = mm.stopMongo(ins); err == nil {
-				ins.Status = STOPPED
-				mm.Send(ins)
-				glog.Infof("stop mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+				ins.Status.Status = STOPPED
+				ins.Status.Message = fmt.Sprintf("mongo instance %s has been stopped and is not running", ins.GetName())
+				go mm.ma.GO_UpdateMongoInstance(ins)
+				glog.Infof("stop mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
 				return nil
 			}
 		}
-		ins.Status = STOPPED
-		mm.Send(ins)
-		glog.Errorf("stop mongo instance %s, container id %s failed", ins.Name, ins.ContainerID)
+		ins.Status.Status = ERROR
+		ins.Status.Message = err.Error()
+		go mm.ma.GO_UpdateMongoInstance(ins)
+		glog.Errorf("stop mongo instance %s, container id %s failed", ins.GetName(), ins.Status.Pid)
 		return err
 	case DELETING:
-		if ins.Running {
+		if ins.Status.Status == RUNNING {
 			mm.stopMongo(ins)
 		}
 		for i := 0; i < MAXTRY; i++ {
 			if err = mm.deleteMongo(ins); err == nil {
-				ins.Status = DELETED
-				mm.Send(ins)
-				glog.Infof("Delete mongo instance %s, container id %s succeed", ins.Name, ins.ContainerID)
+				ins.Status.Status = DELETED
+				ins.Status.Message = fmt.Sprintf("mongo instance %s has been deleted", ins.GetName())
+				go mm.ma.GO_UpdateMongoInstance(ins)
+				mm.ma.monitorMgr.Unregister(ins.GetName())
+				glog.Infof("Delete mongo instance %s, container id %s succeed", ins.GetName(), ins.Status.Pid)
 				return nil
 			}
 		}
-		ins.Status = ERROR
-		mm.Send(ins)
-		glog.Errorf("Delete mongo instance %s, container id %s failed", ins.Name, ins.ContainerID)
-		mm.ma.monitorMgr.Unregister(ins.Name)
+		ins.Status.Status = ERROR
+		ins.Status.Message = err.Error()
+		go mm.ma.GO_UpdateMongoInstance(ins)
+		glog.Errorf("Delete mongo instance %s, container id %s failed", ins.GetName(), ins.Status.Pid)
 		return nil
 	default:
 		return nil
@@ -108,21 +115,21 @@ func (mm *MongoManager) GO_Handle(ins *Mongo) error {
 }
 
 //createMongo is used for createMongo
-func (mm *MongoManager) createMongo(ins *Mongo) error {
+func (mm *MongoManager) createMongo(ins *api.MongoInstance) error {
 	return mm.deploy.createMongo(ins)
 }
 
 //startMongo is used for start mongo
-func (mm *MongoManager) startMongo(ins *Mongo) error {
+func (mm *MongoManager) startMongo(ins *api.MongoInstance) error {
 	return mm.deploy.startMongo(ins)
 }
 
 //stopMongo is used for stop mongo
-func (mm *MongoManager) stopMongo(ins *Mongo) error {
+func (mm *MongoManager) stopMongo(ins *api.MongoInstance) error {
 	return mm.deploy.stopMongo(ins)
 }
 
 //deleteMongo is used for delete mongo
-func (mm *MongoManager) deleteMongo(ins *Mongo) error {
+func (mm *MongoManager) deleteMongo(ins *api.MongoInstance) error {
 	return mm.deploy.deleteMongo(ins)
 }

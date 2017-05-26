@@ -5,8 +5,8 @@
 # chkconfig: 35 85 15
 # description: Mongo is a scalable, document-oriented database.
 # processname: mongod
-# config: {{ .DataPath }}/mongodb-{{ .Name }}.conf
-# pidfile: {{ .DataPath }}/mongodb-{{ .Name }}.pid
+# config: {{ .Status.DataPath }}/mongodb-{{ .GetName }}.conf
+# pidfile: {{ .Status.DataPath }}/mongodb-{{ .GetName }}.pid
 
 . /etc/rc.d/init.d/functions
 
@@ -15,16 +15,16 @@
 
 # NOTE: if you change any OPTIONS here, you get what you pay for:
 # this script assumes all options are in the config file.
-CONFIGFILE="{{ .DataPath }}/mongodb-{{ .Name }}.conf"
+CONFIGFILE="{{ .Status.DataPath }}/mongodb-{{ .GetName }}.conf"
 OPTIONS=" -f $CONFIGFILE"
-SYSCONFIG="/etc/sysconfig/mongodb-{{ .Name }}"
+SYSCONFIG="/etc/sysconfig/mongodb-{{ .GetName }}"
 
 # FIXME: 1.9.x has a --shutdown flag that parses the config file and
 # shuts down the correct running pid, but that's unavailable in 1.8
 # for now.  This can go away when this script stops supporting 1.8.
-DBPATH={{ .DataPath }}/mongodb-{{ .Name }}
-PIDFILE={{ .DataPath }}/mongodb-{{ .Name }}.pid
-mongod=/usr/local/mongo-{{ .Version }}/mongod
+DBPATH={{ .Status.DataPath }}/mongodb-{{ .GetName }}
+PIDFILE={{ .Status.DataPath }}/mongodb-{{ .GetName }}.pid
+mongod=/usr/local/mongo-{{ .Spec.Version }}/mongod
 
 MONGO_USER=mongodb
 MONGO_GROUP=mongodb
@@ -48,20 +48,20 @@ start(){{ "{" }}
   daemon --pidfile "$PIDFILE" --user "$MONGO_USER" $NUMACTL $mongod $OPTIONS
   RETVAL=$?
   echo
-  [ $RETVAL -eq 0 ] && touch /var/lock/subsys/mongodb-{{ .Name }}
+  [ $RETVAL -eq 0 ] && touch /var/lock/subsys/mongodb-{{ .GetName }}
 {{ "}" }}
 
 stop(){{ "{" }}
   echo -n $"Stopping mongod: "
-  killproc -p "$PIDFILE" -d 300 /usr/local/bin/mongod_{{ .Version }}
+  killproc -p "$PIDFILE" -d 300 /usr/local/bin/mongod_{{ .Spec.Version }}
   RETVAL=$?
   echo
-  [ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/mongodb-{{ .Name }}
+  [ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/mongodb-{{ .GetName }}
 {{ "}" }}
 
 restart (){{ "{" }}
-	stop
-	start
+  stop
+  start
 {{ "}" }}
 
 ulimit -n 36000
@@ -78,7 +78,7 @@ case "$1" in
     restart
     ;;
   condrestart)
-    [ -f /var/lock/subsys/mongodb-{{ .Name }}] && restart || :
+    [ -f /var/lock/subsys/mongodb-{{ .GetName }}] && restart || :
     ;;
   status)
     status $mongod

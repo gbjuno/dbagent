@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	//	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/golang/glog"
@@ -9,6 +9,7 @@ import (
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	//"reflect"
+	"teego/pkg/api"
 	"time"
 )
 
@@ -27,24 +28,23 @@ func (mon *MonitorManager) monitorAll() {
 	for {
 		for _, insName := range mon.insList[:] {
 			mon.simpleCheckOneIns(insName)
+			go mon.ma.GO_UpdateMongoInstance(mon.ma.mongoMap[insName])
 		}
-		time.Sleep(60)
+		time.Sleep(60 * time.Second)
 	}
 }
 
-func (mon *MonitorManager) monitorWorker(ctx context.Context, ins *Mongo) {
-
-}
-
 func (mon *MonitorManager) simpleCheckOneIns(insName string) {
+	mon.ma.mapLock[insName].Lock()
+	defer mon.ma.mapLock[insName].Unlock()
 	ins := mon.ma.mongoMap[insName]
-	glog.Infof("checking mongo instance %s status...", ins.Name)
-	conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Port))
+	glog.Infof("checking mongo instance %s status...", ins.GetName())
+	conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Spec.Port))
 	if err != nil {
-		glog.Errorf("connect mongo instance %s failed", ins.Name)
-		glog.Errorf("mongo instance %s is not running", ins.Name)
-		ins.Running = false
-		mon.ma.mongoMgr.Send(ins)
+		glog.Errorf("connect mongo instance %s failed", ins.GetName())
+		glog.Errorf("mongo instance %s is not running", ins.GetName())
+		ins.Status.Message = "Monitor: mongodb is not running"
+		ins.Status.Status = STOPPED
 		return
 	}
 	defer conn.Close()
@@ -53,16 +53,16 @@ func (mon *MonitorManager) simpleCheckOneIns(insName string) {
 	var result interface{}
 	err = c.Find(nil).One(&result)
 	if err != nil {
-		glog.Errorf("cannot get data of DB local Table startup_log of mongo %s", ins.Name)
-		glog.Errorf("mongo instance %s is not running property", ins.Name)
-		ins.Running = false
-		mon.ma.mongoMgr.Send(ins)
+		glog.Errorf("cannot get data of DB local Table startup_log of mongo %s", ins.GetName())
+		glog.Errorf("mongo instance %s is not running property", ins.GetName())
+		ins.Status.Message = "Monitor: running but without startup_log"
+		ins.Status.Status = ERROR
 		return
 	}
-	glog.Infof("mongo instance %s is alive and ready", ins.Name)
-	ins.Running = true
+	glog.Infof("mongo instance %s is alive and ready", ins.GetName())
+	ins.Status.Status = RUNNING
+	ins.Status.Message = "Monitor: mongodb is running"
 	glog.Infof("instance %v", ins)
-	mon.ma.mongoMgr.Send(ins)
 }
 
 func (mon *MonitorManager) checkInsDetail(ctx context.Context, insNameCh <-chan string) {
@@ -81,35 +81,93 @@ func (mon *MonitorManager) checkInsDetail(ctx context.Context, insNameCh <-chan 
 	glog.Infof("monitor worker exits")
 }
 
-func (mon *MonitorManager) getMongoStatus(ins *Mongo) {
-	conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Port))
+func (mon *MonitorManager) getMongoStatus(ins *api.MongoInstance) {
+	mon.ma.mapLock[ins.GetName()].Lock()
+	defer mon.ma.mapLock[ins.GetName()].Unlock()
+	conn, err := mgo.Dial(fmt.Sprintf("127.0.0.1:%d/admin", ins.Spec.Port))
 	if err != nil {
-		glog.Errorf("connect mongo instance %s failed", ins.Name)
-		glog.Errorf("mongo instance %s is not running", ins.Name)
-		ins.Running = false
-		mon.ma.mongoMgr.Send(ins)
+		glog.Errorf("connect mongo instance %s failed", ins.GetName())
+		glog.Errorf("mongo instance %s is not running", ins.GetName())
+		ins.Status.Status = STOPPED
+		ins.Status.Message = "mongodb is not running"
 		return
 	}
 	var result bson.M
 	err = conn.DB("admin").Run(bson.D{{"serverStatus", 1}}, &result)
 	if err != nil {
-		glog.Infof("get Mongo Server Status failed, err %c", err)
+		glog.Errorf("get Mongo Server Status failed, err %c", err)
+		return
 	}
-	glog.Infof("Mongo Server Status: %v", result)
 	defer conn.Close()
-	j, err := json.Marshal(result["network"])
-	if err != nil {
-		glog.Errorf("cannot marshal network")
-		return
-	}
-	v := &Network{}
-	if err != nil {
-		glog.Errorf("cannot unmarshal network")
-		return
-	}
-	err = json.Unmarshal(j, &v)
-	glog.Infof("network: %T %v", v, v)
-	glog.Infof("network: %T %v", result["network"], result["network"])
+	/*
+		serverStatus, err := json.Marshal(result)
+		if err != nil {
+			glog.Errorf("get Mongo Server Status failed, err %c", err)
+			return
+		}
+	*/
+
+	asserts := Asserts{}
+	network := Network{}
+	connections := Connections{}
+	//dur := Dur{}
+	opcounters := Opcounters{}
+	storageEngine := StorageEngine{}
+	mem := Mem{}
+
+	asserts.Regular = result["asserts"].(bson.M)["regular"].(int)
+	asserts.Warning = result["asserts"].(bson.M)["warning"].(int)
+	asserts.Msg = result["asserts"].(bson.M)["msg"].(int)
+	asserts.User = result["asserts"].(bson.M)["user"].(int)
+	asserts.Msg = result["asserts"].(bson.M)["rollovers"].(int)
+
+	network.BytesIn = result["network"].(bson.M)["bytesIn"].(int64)
+	network.BytesOut = result["network"].(bson.M)["bytesOut"].(int64)
+	network.NumRequests = result["network"].(bson.M)["numRequests"].(int64)
+
+	connections.Available = result["connections"].(bson.M)["available"].(int)
+	connections.Current = result["connections"].(bson.M)["current"].(int)
+	connections.TotalCreated = result["connections"].(bson.M)["totalCreated"].(int)
+	/*
+		dur.Commits = result["dur"].(bson.M)["commits"].(int64)
+		dur.CommitsInWriteLock = result["dur"].(bson.M)["commitsInWriteLock"].(int64)
+		dur.Compression = result["dur"].(bson.M)["compression"].(int64)
+		dur.EarlyCommits = result["dur"].(bson.M)["earlyCommits"].(int64)
+		dur.JournaledMB = result["dur"].(bson.M)["journaledMB"].(int64)
+		dur.WriteToDataFilesMB = result["dur"].(bson.M)["writeToDataFilesMB"].(int64)
+
+		dur.DTimeMs.Commits = result["dur"].(bson.M)["timeMs"].(bson.M)["commits"].(int64)
+		dur.DTimeMs.CommitsInWriteLock = result["dur"].(bson.M)["timeMs"].(bson.M)["commitsInWriteLock"].(int64)
+		dur.DTimeMs.Dt = result["dur"].(bson.M)["timeMs"].(bson.M)["dt"].(int64)
+		dur.DTimeMs.PrepLogBuffer = result["dur"].(bson.M)["timeMs"].(bson.M)["prepLogBuffer"].(int64)
+		dur.DTimeMs.RemapPrivateView = result["dur"].(bson.M)["timeMs"].(bson.M)["remapPrivateView"].(int64)
+		dur.DTimeMs.WriteToDataFiles = result["dur"].(bson.M)["timeMs"].(bson.M)["writeToDataFiles"].(int64)
+		dur.DTimeMs.WriteToJournal = result["dur"].(bson.M)["timeMs"].(bson.M)["writeToJournal"].(int64)
+	*/
+	opcounters.Command = result["opcounters"].(bson.M)["command"].(int)
+	opcounters.Delete = result["opcounters"].(bson.M)["delete"].(int)
+	opcounters.Getmore = result["opcounters"].(bson.M)["getmore"].(int)
+	opcounters.Insert = result["opcounters"].(bson.M)["insert"].(int)
+	opcounters.Query = result["opcounters"].(bson.M)["query"].(int)
+	opcounters.Update = result["opcounters"].(bson.M)["update"].(int)
+
+	storageEngine.Name = result["storageEngine"].(bson.M)["name"].(string)
+	storageEngine.Persistent = result["storageEngine"].(bson.M)["persistent"].(bool)
+	storageEngine.SupportsCommittedReads = result["storageEngine"].(bson.M)["supportsCommittedReads"].(bool)
+
+	mem.Bits = result["mem"].(bson.M)["bits"].(int)
+	mem.Mapped = result["mem"].(bson.M)["mapped"].(int)
+	mem.MappedWithJournal = result["mem"].(bson.M)["mappedWithJournal"].(int)
+	mem.Resident = result["mem"].(bson.M)["resident"].(int)
+	mem.Supported = result["mem"].(bson.M)["supported"].(bool)
+	mem.Virtual = result["mem"].(bson.M)["virtual"].(int)
+
+	glog.Infof("%v", asserts)
+	glog.Infof("%v", network)
+	glog.Infof("%v", connections)
+	glog.Infof("%v", opcounters)
+	glog.Infof("%v", storageEngine)
+
 	return
 }
 
@@ -143,8 +201,8 @@ func (mon *MonitorManager) Go_Run() {
 					break
 				}
 			}
-			glog.Infof("after insList: %v", mon.insList)
 			mon.insList = append(mon.insList, j)
+			glog.Infof("after insList: %v", mon.insList)
 		case l := <-mon.leave:
 			glog.Infof("before insList: %v", mon.insList)
 			if len(l) == 0 {
@@ -153,7 +211,7 @@ func (mon *MonitorManager) Go_Run() {
 			}
 			for index, ins := range mon.insList {
 				if ins == l {
-					mon.insList = append(mon.insList[:index-1], mon.insList[index+1:]...)
+					mon.insList = append(mon.insList[:index], mon.insList[index+1:]...)
 					glog.Infof("after insList: %v", mon.insList)
 					break
 				}
@@ -166,6 +224,11 @@ func (mon *MonitorManager) Go_Run() {
 //Add mongo instance into monitor list
 func (mon *MonitorManager) Init() {
 	for _, ins := range mon.ma.mongoMap {
-		mon.insList = append(mon.insList, ins.Name)
+		if ins.Status.Status != DELETED || ins.Status.Status != CREATING {
+			mon.insList = append(mon.insList, ins.GetName())
+		}
 	}
+	glog.Infof("monitorManager is initilized, monitor List: %v", mon.insList)
+	go mon.Go_Run()
+	go mon.monitorAll()
 }

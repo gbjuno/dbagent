@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 	//	"os"
 	//	"os/exec"
+	"teego/pkg/api"
 	"testing"
 )
 
@@ -27,41 +29,53 @@ func TestMongoAgent_deployMongoIns_noBaseP(t *testing.T) {
 func initial() *MongoAgent {
 	mongoAgent := NewMongoAgent()
 	for i := 0; i < 5; i++ {
-		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = &Mongo{
-			Name:        fmt.Sprintf("test%d", i),
-			BasePath:    "/opt/data",
-			Role:        "SingleDB",
-			Port:        27000 + i,
-			CacheSizeMB: 10240,
-			Version:     "3.4.4",
-			Type:        SingleDB,
-			NextOp:      "CREATE",
+		mongoAgent.mongoMap[fmt.Sprintf("test%d", i)] = &api.MongoInstance{
+			TypeMeta: api.TypeMeta{
+				Kind:       "MongoInstance",
+				APIVersion: "v1",
+			},
+			ObjectMeta: api.ObjectMeta{
+				Name:              fmt.Sprintf("test%d", i),
+				Namespace:         "aaa",
+				Labels:            map[string]string{"foo": "bar"},
+				ResourceVersion:   "7215",
+				CreationTimestamp: time.Now(),
+			},
+			Spec: api.MongoInstanceSpec{
+				Role:         "master",
+				Node:         "127.0.0.1",
+				Port:         27000 + i,
+				Replication:  "",
+				MasterServer: "",
+				CacheSizeMB:  1024,
+				Version:      "3.4.4",
+			},
+			Status: api.MongoInstanceStatus{
+				Status:            CREATING,
+				Running:           "initial",
+				Message:           "",
+				Pid:               "",
+				BasePath:          "/opt",
+				DataPath:          "",
+				LastHeartbeatTime: time.Now(),
+			},
 		}
+		mongoAgent.mapLock[fmt.Sprintf("test%d", i)] = &sync.Mutex{}
 	}
 	return mongoAgent
 }
 
 func Test_Handler(t *testing.T) {
 	t.Logf("Test_handler")
-	mongoAgent := NewMongoAgent()
-	mongoAgent.mongoMap["test0"] = &Mongo{
-		Name:        "test0",
-		BasePath:    "/opt/data",
-		Role:        "SingleDB",
-		Port:        27000,
-		CacheSizeMB: 10240,
-		Version:     "3.2.11",
-		Type:        SingleDB,
-		Status:      CREATING,
-	}
-	t.Logf("get mongoAgent success")
+	mongoAgent := initial()
+	t.Logf("get mongoAgent success, mongoAgent: %v", mongoAgent)
 	ins := mongoAgent.mongoMap["test0"]
 	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("create a mongo instance failed")
 	}
 	t.Logf("create mongo instance success")
 
-	ins.Status = STOPPING
+	ins.Status.Status = STOPPING
 	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("stop a mongo instance failed")
 	}
@@ -70,13 +84,13 @@ func Test_Handler(t *testing.T) {
 
 	time.Sleep(time.Duration(3) * time.Second)
 
-	ins.Status = STARTING
+	ins.Status.Status = STARTING
 	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("start a mongo instance failed")
 	}
 	t.Logf("start mongo instance success")
 
-	ins.Status = DELETING
+	ins.Status.Status = DELETING
 	if err := mongoAgent.mongoMgr.GO_Handle(ins); err != nil {
 		t.Fatal("delete a mongo instance failed")
 	}
